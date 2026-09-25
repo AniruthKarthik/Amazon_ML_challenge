@@ -85,9 +85,10 @@
 ## Phase 7: LightGBM Baseline
 
 **Objective:** Train primary pair scorer using structural/lexical features.
-- [ ] Define cross-validation folds using connected components from Phase 1.
-- [ ] Train LightGBM pair scorer.
-- [ ] Evaluate pair-level precision/recall/AUC (Diagnostics only).
+- [x] Implement cross-validation folds using connected components from Phase 1.
+- [x] Implement deterministic LightGBM pair-scorer training for one component-disjoint fold.
+- [x] Implement pair-level precision/recall/AUC diagnostics (not entity metrics).
+- [ ] Fit on the full training candidates and inspect memory use and learning curves in Colab.
 **Acceptance Criteria:** Model fits within memory constraints, stable learning curves.
 **Next Decision:** Proceed to Phase 8.
 

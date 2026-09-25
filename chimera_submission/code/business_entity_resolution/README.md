@@ -74,3 +74,14 @@ encoders separately within each training fold when building OOF features.
 `transform` yields `(candidate, features)` pairs lazily, with no labels or
 ground-truth fields. Full-data feature materialization and timing are deferred
 to Colab after the retrieval decision.
+
+## Phase 7: pair-model baseline
+
+`src.pair_model.assign_component_folds` maps Phase 1 truth-graph components
+to GroupKFold assignments. `train_pair_baseline` fits one deterministic
+LightGBM fold from numeric Phase 6 features and returns validation scores,
+learning history, and pair-level precision/recall/AUC diagnostics. It rejects
+overlapping train/validation components and non-finite features. Local tests
+fit only tiny synthetic matrices; full training, memory checks, and learning-
+curve review are deferred to Colab. Pair diagnostics are not retrieval,
+ranking-failure, or entity-level accuracy estimates.
