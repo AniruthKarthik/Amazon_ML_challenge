@@ -99,18 +99,18 @@
 ## Phase 9: Entity-Level Decision + Exact F₀.₅
 
 **Objective:** Aggregate pair scores and compute the exact competition metric.
-- [ ] Implement entity-level aggregation (max score, second max, counts, score gaps).
-- [ ] Implement exact macro F₀.₅ computation per competition rules.
-- [ ] Compare Raw LightGBM vs Isotonic Calibrated scores on final Macro F₀.₅.
+- [x] Implement entity-level aggregation (max score, second max, counts, score gaps).
+- [x] Implement exact macro F₀.₅ computation per competition rules.
+- [x] Compare Raw LightGBM vs Isotonic Calibrated scores on final Macro F₀.₅.
 **Decision Gate:** Keep Isotonic Calibration ONLY if it improves Entity F₀.₅ or threshold stability.
 
 ## Phase 10: Threshold Optimization & Robust Policy Selection
 
 **Objective:** Jointly optimize decision thresholds and operationally define robust policy against country shift.
-- [ ] Optimize pair threshold, entity threshold, and gap thresholds jointly on OOF entity F₀.₅.
-- [ ] Run threshold stability analysis (fold dispersion, ± sensitivity).
-- [ ] Simulate country/domain shift (e.g., leave-one-country-out). Measure mean F₀.₅, worst-fold/country F₀.₅, and variance.
-- [ ] If country shift causes meaningful degradation, execute threshold remediation rule:
+- [x] Optimize pair threshold, entity threshold, and gap thresholds jointly on OOF entity F₀.₅.
+- [x] Run threshold stability analysis (fold dispersion, ± sensitivity).
+- [x] Simulate country/domain shift (e.g., leave-one-country-out). Measure mean F₀.₅, worst-fold/country F₀.₅, and variance.
+- [x] If country shift causes meaningful degradation, execute threshold remediation rule:
   - Check if degradation is driven by threshold policy.
   - Evaluate Policy A: Global Threshold.
   - Evaluate Policy B: Country/source-specific thresholds (only if labeled validation evidence supports).
