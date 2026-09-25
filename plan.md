@@ -98,3 +98,4 @@ This plan executes the architecture through evidence-driven gates. No downstream
 - Run the locked policy on test TSVs.
 - Execute strict internal ID/format validators and official `validate_submission.py`.
 - *Dependency:* Phase 15 locked configuration.
+- An explicitly marked provisional lexical baseline may be run end-to-end before Phase 15 for operational testing; its sampled OOF diagnostics and output must not be presented as the final locked system.

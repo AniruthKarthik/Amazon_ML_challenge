@@ -33,6 +33,7 @@ from .pair_features import PairFeatureExtractor
 from .pair_model import BaselineConfig, train_pair_baseline
 from .oof_ranking import evaluate_oof_ranking
 from .pipeline_store import DiskCandidateStore, QueryCandidates
+from .pipeline_provenance import model_code_sha256
 from .threshold_policy import save_frozen_config
 from .threshold_search import (
     OOFEntity, ThresholdGrid, leave_one_country_out, save_search_report,
@@ -246,6 +247,7 @@ def _write_audit_artifacts(
 def train_cpu_baseline(
     store: DiskCandidateStore, output_dir: str | Path,
     config: CPUTrainingConfig,
+    training_files_sha256: dict[str, str] | None = None,
 ) -> dict[str, object]:
     """Cross-fit raw pair scores, tune policy, then fit a separate final model."""
     if store.connection.execute(
@@ -351,6 +353,8 @@ def train_cpu_baseline(
         "selected_crossfit_metrics": asdict(
             search.policies[search.selected_policy].crossfit_metrics),
         "config": asdict(config),
+        "training_files_sha256": training_files_sha256,
+        "model_code_sha256": model_code_sha256(),
         "audit_artifacts": audit,
         "retrieval_channels": store.channels,
         "retrieval_top_k": store.top_k,

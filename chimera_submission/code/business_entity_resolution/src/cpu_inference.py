@@ -19,23 +19,97 @@ from .entity_meta_model import load_meta_artifact, predict_frozen_meta_batch
 from .phase4_benchmark import run_channel
 from .phase4_store import open_store
 from .pipeline_store import DiskCandidateStore, QueryCandidates, build_unlabeled_store
+from .pipeline_provenance import model_code_sha256
 from .retrieval import CHANNELS, RetrievalConfig
 from .threshold_policy import load_frozen_config
 
 
 MATCHING_HEADER = ("source1_entity_id", "matched_entity_ids")
 CANDIDATE_HEADER = ("source1_entity_id", "candidate_entity_ids")
+OUTPUT_MANIFEST_VERSION = 1
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(4 * 1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _input_artifact_hashes(model_dir: Path, test_work_dir: Path,
+                           selected: str) -> dict[str, str]:
+    names = ("training_report.json", "decision_config.json", "pair_model.txt",
+             "feature_extractor.joblib")
+    artifacts = {name: _sha256(model_dir / name) for name in names}
+    if selected == "meta":
+        artifacts["meta_model.joblib"] = _sha256(model_dir / "meta_model.joblib")
+    elif selected != "deterministic":
+        raise ValueError("unknown frozen entity-decision family")
+    test_manifest = test_work_dir / "test_inputs.json"
+    if not test_manifest.is_file():
+        raise FileNotFoundError(test_manifest)
+    artifacts["test_inputs.json"] = _sha256(test_manifest)
+    return artifacts
+
+
+def _retrieval_artifact_identity(test_work_dir: Path) -> dict[str, dict[str, int]]:
+    """Cheap mutation guard for large immutable test arrays and SQLite store."""
+    names = ["store.sqlite"]
+    names.extend(f"{channel}.int32" for channel in CHANNELS)
+    names.extend(f"{channel}.float32" for channel in ("char_name", "char_address"))
+    if (test_work_dir / "rare_token.float32").exists():
+        names.append("rare_token.float32")
+    result = {}
+    for name in names:
+        stats = (test_work_dir / name).stat()
+        result[name] = {"size": stats.st_size, "mtime_ns": stats.st_mtime_ns}
+    return result
+
+
+def verify_inference_output(
+    model_dir: str | Path, test_work_dir: str | Path,
+    output_dir: str | Path,
+) -> dict[str, int]:
+    """Reuse outputs only when source/model hashes and full TSV checks agree."""
+    model_dir, test_work_dir, output_dir = map(
+        Path, (model_dir, test_work_dir, output_dir))
+    manifest_path = output_dir / "output_manifest.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if payload.get("schema_version") != OUTPUT_MANIFEST_VERSION:
+        raise ValueError("inference output manifest version mismatch")
+    report = json.loads((model_dir / "training_report.json").read_text(encoding="utf-8"))
+    if report.get("model_code_sha256") != model_code_sha256():
+        raise ValueError("model was produced by different scoring/decision code")
+    selected = report.get("selected_entity_decision", "deterministic")
+    if payload.get("selected_entity_decision") != selected or \
+       payload.get("input_artifacts_sha256") != _input_artifact_hashes(
+           model_dir, test_work_dir, selected):
+        raise ValueError("inference outputs do not match current model/test inputs")
+    if payload.get("retrieval_artifacts") != _retrieval_artifact_identity(test_work_dir):
+        raise ValueError("inference outputs do not match current retrieval artifacts")
+    files = {
+        name: _sha256(output_dir / name)
+        for name in ("matching_results.tsv", "candidate_pairs.tsv")
+    }
+    if payload.get("output_files_sha256") != files:
+        raise ValueError("inference output file hash mismatch")
+    store_path = test_work_dir / "store.sqlite"
+    if not store_path.is_file():
+        raise FileNotFoundError(store_path)
+    connection = open_store(store_path)
+    try:
+        return validate_outputs(connection, output_dir / "matching_results.tsv",
+                                output_dir / "candidate_pairs.tsv")
+    finally:
+        connection.close()
 
 
 def _hash_inputs(test_dir: Path) -> dict[str, str]:
     result = {}
     for source in (1, 2, 3):
         name = f"test_source{source}.tsv"
-        digest = hashlib.sha256()
-        with (test_dir / name).open("rb") as handle:
-            for block in iter(lambda: handle.read(4 * 1024 * 1024), b""):
-                digest.update(block)
-        result[name] = digest.hexdigest()
+        result[name] = _sha256(test_dir / name)
     return result
 
 
@@ -138,6 +212,8 @@ def predict_test(
     model_dir, test_work_dir, output_dir = map(
         Path, (model_dir, test_work_dir, output_dir))
     report = json.loads((model_dir / "training_report.json").read_text())
+    if report.get("model_code_sha256") != model_code_sha256():
+        raise ValueError("model was produced by different scoring/decision code")
     if report.get("scope", "").startswith("fixed-seed sampled") and not allow_exploratory:
         raise ValueError("sampled model is exploratory; pass allow_exploratory=True for a smoke run")
     decision = load_frozen_config(model_dir / "decision_config.json")
@@ -195,6 +271,21 @@ def predict_test(
                 _write_batch(batch, extractor, model, decision,
                              matching_writer, candidate_writer, meta_policy)
         validate_outputs(connection, matching_tmp, candidate_tmp)
+        manifest = {
+            "schema_version": OUTPUT_MANIFEST_VERSION,
+            "selected_entity_decision": selected,
+            "input_artifacts_sha256": _input_artifact_hashes(
+                model_dir, test_work_dir, selected),
+            "retrieval_artifacts": _retrieval_artifact_identity(test_work_dir),
+            "output_files_sha256": {
+                "matching_results.tsv": _sha256(matching_tmp),
+                "candidate_pairs.tsv": _sha256(candidate_tmp),
+            },
+        }
+        (building / "output_manifest.json").write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
         os.replace(building, output_dir)
         return {"source1_rows": store.source_count,
                 "target_rows": store.target_count}

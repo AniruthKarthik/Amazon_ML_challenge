@@ -4,6 +4,37 @@ Team: `chimera`
 
 ## CPU pipeline interface
 
+Run the complete **provisional lexical baseline** from this directory with:
+
+```bash
+python -m src.main run \
+  --train-dir ../../../dataset/train \
+  --test-dir ../../../dataset/test \
+  --work-root ../../../cpu-run \
+  --output-dir ../../../provisional-output \
+  --train-entities 3000 \
+  --allow-provisional
+```
+
+This one command runs the training-only Phase 4 benchmark, sampled OOF
+LightGBM/threshold selection, unlabeled test retrieval, frozen inference, and
+internal SQLite-backed output validation. Completed stages are checked and
+reused on rerun. If you already have Phase 4 artifacts, add
+`--phase4-work /path/to/phase4-work --phase4-report /path/to/phase4-report`.
+Do not run it concurrently with an existing Phase 4 process. A partial report
+or partially written model/output directory is preserved for inspection and
+will stop the run rather than be overwritten. Output TSVs are
+`matching_results.tsv` and `candidate_pairs.tsv`; `output_manifest.json`
+records their provenance. Add `--official-check-ids` only when you can spare
+the official validator's higher memory use. No test labels are read.
+
+The 3000-entity count is a bounded smoke-run example, not a model-quality
+recommendation. The full Phase 4 retrieval stages can still take substantial
+CPU time and disk space on the competition data. This command produces a
+usable **provisional** output, not a Phase 15–locked final model.
+
+For individual stage control, use:
+
 ```bash
 python -m src.phase4_benchmark --train-dir /path/to/dataset/train \
   --output-dir /path/to/phase4-report --work-dir /path/to/phase4-work

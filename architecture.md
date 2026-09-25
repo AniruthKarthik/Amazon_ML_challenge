@@ -153,6 +153,7 @@ The final system is selected via cross-fitted entity-level macro F₀.₅.
 A frozen, deterministic pipeline. 
 - **Flow:** Load frozen config → Multi-view normalization → Retrieve base + conditional candidates → Dedup/Cap → Build features → Score → Aggregate → Apply locked threshold policy → Output TSV.
 - **Validation:** Internal ID uniqueness/format checks + official `validate_submission.py --check-ids`.
+- **Provisional CPU baseline:** The lexical-only one-command runner may emit an explicitly acknowledged, sampled-training output for operational use before Phase 15. It records input/model/output provenance and does not claim final model selection or full-training OOF accuracy.
 
 ---
 
