@@ -7,6 +7,10 @@ each S2/S3 target to have at most one S1 owner.
 
 from __future__ import annotations
 
+import csv
+import gzip
+import hashlib
+import io
 import json
 import math
 import os
@@ -181,6 +185,64 @@ def oof_threshold_grid(entities: list[OOFEntity], points: int) -> ThresholdGrid:
                          _quantiles(gaps, points))
 
 
+def _write_audit_artifacts(
+    directory: Path, store: DiskCandidateStore,
+    sequences: tuple[int, ...], fold_by_seq: dict[int, int],
+    entities: list[OOFEntity],
+) -> dict[str, object]:
+    """Persist replayable sample membership and label-free raw OOF pair scores."""
+    sample_path = directory / "sampled_sources.tsv"
+    sample_ids = set()
+    with sample_path.open("x", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
+        writer.writerow(("source_seq", "source1_entity_id", "fold_id"))
+        for seq in sequences:
+            source_id = store.connection.execute(
+                "SELECT entity_id FROM source1 WHERE seq=?", (seq,)
+            ).fetchone()[0]
+            sample_ids.add(source_id)
+            writer.writerow((seq, source_id, fold_by_seq[seq]))
+    scores_path = directory / "oof_pairs.tsv.gz"
+    ordered = sorted(entities, key=lambda entity: entity.source_id)
+    if len(ordered) != len(sequences) or \
+       {entity.source_id for entity in ordered} != sample_ids:
+        raise ValueError("OOF entities do not cover sampled S1 exactly")
+    pair_count = 0
+    with scores_path.open("xb") as binary:
+        with gzip.GzipFile(filename="", fileobj=binary, mode="wb", mtime=0) as compressed:
+            with io.TextIOWrapper(compressed, encoding="utf-8", newline="") as handle:
+                writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
+                writer.writerow(("source1_entity_id", "candidate_entity_id",
+                                 "candidate_rank", "fold_id", "raw_oof_score"))
+                for entity in ordered:
+                    if len(entity.candidate_ids) != len(entity.scores) or \
+                       len(set(entity.candidate_ids)) != len(entity.candidate_ids):
+                        raise ValueError("OOF candidate IDs/scores are invalid")
+                    for rank, (target_id, score) in enumerate(
+                        zip(entity.candidate_ids, entity.scores), 1
+                    ):
+                        if not math.isfinite(score) or not 0 <= score <= 1:
+                            raise ValueError("OOF pair score is invalid")
+                        writer.writerow((entity.source_id, target_id, rank,
+                                         entity.fold, format(score, ".17g")))
+                        pair_count += 1
+
+    def digest(path: Path) -> str:
+        sha = hashlib.sha256()
+        with path.open("rb") as handle:
+            for block in iter(lambda: handle.read(4 * 1024 * 1024), b""):
+                sha.update(block)
+        return sha.hexdigest()
+
+    return {
+        "sampled_sources": sample_path.name,
+        "sampled_sources_sha256": digest(sample_path),
+        "oof_pairs": scores_path.name,
+        "oof_pairs_sha256": digest(scores_path),
+        "oof_pair_rows": pair_count,
+    }
+
+
 def train_cpu_baseline(
     store: DiskCandidateStore, output_dir: str | Path,
     config: CPUTrainingConfig,
@@ -220,6 +282,8 @@ def train_cpu_baseline(
         oof_entities.extend(_score_queries(
             store, valid_seqs, extractor, result.model, fold_by_seq))
         print(f"completed OOF fold {fold + 1}/{config.folds}", flush=True)
+    audit = _write_audit_artifacts(
+        building, store, sequences, fold_by_seq, oof_entities)
     grid = oof_threshold_grid(oof_entities, config.grid_points)
     search = search_thresholds(oof_entities, grid, "raw")
     sensitivity = threshold_sensitivity(
@@ -287,6 +351,7 @@ def train_cpu_baseline(
         "selected_crossfit_metrics": asdict(
             search.policies[search.selected_policy].crossfit_metrics),
         "config": asdict(config),
+        "audit_artifacts": audit,
         "retrieval_channels": store.channels,
         "retrieval_top_k": store.top_k,
         "retrieval_max_candidates": store.max_candidates,

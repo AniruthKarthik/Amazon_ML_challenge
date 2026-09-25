@@ -119,6 +119,10 @@ searches A/B/C decision policies on OOF scores, and freezes a separate final
 model and feature extractor. This is a CPU-feasible exploratory sample; its
 metrics are not full-training estimates. No full project-data training is run
 by the repository tests.
+Each CPU training run saves `sampled_sources.tsv` and a deterministic,
+label-free `oof_pairs.tsv.gz` with fold IDs and raw pair scores. SHA-256 hashes
+in `training_report.json` make the sample and OOF evidence auditable for later
+ablations; ground truth remains in the validated training store.
 Add `--evaluate-meta` to `src.main train` only when also supplying explicit
 `--max-worst-fold-drop` and `--max-fold-std-increase` robustness tolerances.
 The runner compares Phase 12 and Phase 10 on identical OOF folds and freezes

@@ -1,5 +1,8 @@
 """Small training-only integration checks; no project dataset is touched."""
 
+import csv
+import gzip
+import hashlib
 import json
 import tempfile
 import unittest
@@ -88,6 +91,19 @@ class CPUTrainingTests(unittest.TestCase):
             self.assertEqual(result["sampled_source_entities"], 9)
             self.assertEqual(result["sampled_retrieved_positives"], 9)
             self.assertEqual(result["sampled_pair_rows"], 18)
+            audit = result["audit_artifacts"]
+            self.assertEqual(audit["oof_pair_rows"], 18)
+            sample_path = root / "model" / audit["sampled_sources"]
+            self.assertEqual(len(sample_path.read_text().splitlines()), 10)
+            scores_path = root / "model" / audit["oof_pairs"]
+            self.assertEqual(hashlib.sha256(scores_path.read_bytes()).hexdigest(),
+                             audit["oof_pairs_sha256"])
+            with gzip.open(scores_path, "rt", encoding="utf-8", newline="") as handle:
+                rows = list(csv.DictReader(handle, delimiter="\t"))
+            self.assertEqual(len(rows), 18)
+            self.assertEqual([row["source1_entity_id"] for row in rows],
+                             sorted(row["source1_entity_id"] for row in rows))
+            self.assertNotIn("matched_entity_ids", rows[0])
             self.assertEqual(result["oof_retrieved_pair_ranking"]["retrieved_true_pairs"], 9)
             self.assertEqual(len(result["fold_pair_diagnostics"]), 3)
             self.assertTrue((root / "model" / "pair_model.txt").exists())
@@ -102,6 +118,9 @@ class CPUTrainingTests(unittest.TestCase):
                              "leakage-safe training OOF pair predictions")
             with self.assertRaises(FileExistsError):
                 train_cpu_baseline(store, root / "model", config)
+            repeated = train_cpu_baseline(store, root / "model_repeat", config)
+            self.assertEqual(repeated["audit_artifacts"]["oof_pairs_sha256"],
+                             audit["oof_pairs_sha256"])
             connection.close()
 
     def test_meta_comparison_is_explicit_and_can_be_rejected(self):
