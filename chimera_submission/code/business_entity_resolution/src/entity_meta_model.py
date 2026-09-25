@@ -309,6 +309,27 @@ def predict_frozen_meta(
     return predict_meta_match_set(name, candidate_ids, scores, multi_pair_threshold)
 
 
+def predict_frozen_meta_batch(
+    model: object,
+    entities: Sequence[tuple[str, Sequence[str], Sequence[float]]],
+    multi_pair_threshold: float,
+    num_threads: int = 1,
+) -> list[list[str]]:
+    """Batch unchanged frozen Phase 12 decisions for CPU-efficient inference."""
+    _threshold(multi_pair_threshold, "multi_pair_threshold")
+    if not entities:
+        return []
+    features = np.stack([
+        meta_feature_vector(source_id, candidate_ids, scores)
+        for source_id, candidate_ids, scores in entities
+    ])
+    classes = _predict_classes(model, features, num_threads)
+    return [
+        predict_meta_match_set(name, candidate_ids, scores, multi_pair_threshold)
+        for name, (_, candidate_ids, scores) in zip(classes, entities)
+    ]
+
+
 def save_meta_artifact(path: str | Path, result: MetaOOFResult) -> None:
     """Freeze the trained model and threshold in one non-overwriting artifact."""
     destination = Path(path)

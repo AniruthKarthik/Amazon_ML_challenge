@@ -15,6 +15,7 @@ import joblib
 import lightgbm as lgb
 import numpy as np
 
+from .entity_meta_model import load_meta_artifact, predict_frozen_meta_batch
 from .phase4_benchmark import run_channel
 from .phase4_store import open_store
 from .pipeline_store import DiskCandidateStore, QueryCandidates, build_unlabeled_store
@@ -87,6 +88,7 @@ def prepare_test_retrieval(
 def _write_batch(
     queries: list[QueryCandidates], extractor, model: lgb.Booster,
     decision, matching_writer, candidate_writer,
+    meta_policy: tuple[object, float, int] | None = None,
 ) -> None:
     rows = []
     lengths = []
@@ -103,12 +105,21 @@ def _write_batch(
     if not np.isfinite(probabilities).all() or np.any((probabilities < 0) | (probabilities > 1)):
         raise ValueError("pair model produced invalid probabilities")
     offset = 0
+    entity_rows = []
     for query, length in zip(queries, lengths):
         source_id = query.source.raw.entity_id
         ids = [candidate.candidate_entity_id for candidate in query.candidates]
         scores = probabilities[offset:offset + length].tolist()
         offset += length
-        matched = decision.predict(ids, scores)
+        entity_rows.append((source_id, ids, scores))
+    if meta_policy is None:
+        predictions = [decision.predict(ids, scores)
+                       for _, ids, scores in entity_rows]
+    else:
+        meta_model, threshold, threads = meta_policy
+        predictions = predict_frozen_meta_batch(
+            meta_model, entity_rows, threshold, threads)
+    for (source_id, ids, _), matched in zip(entity_rows, predictions):
         if len(matched) != len(set(matched)) or not set(matched) <= set(ids):
             raise AssertionError("frozen policy emitted a duplicate or unknown target")
         matching_writer.writerow((source_id, ",".join(matched)))
@@ -135,6 +146,15 @@ def predict_test(
     # joblib is pickle-based; only load a trusted, locally produced artifact.
     extractor = joblib.load(model_dir / "feature_extractor.joblib")
     model = lgb.Booster(model_file=str(model_dir / "pair_model.txt"))
+    selected = report.get("selected_entity_decision", "deterministic")
+    if selected == "meta":
+        meta_model, threshold, meta_config = load_meta_artifact(
+            model_dir / "meta_model.joblib")
+        meta_policy = (meta_model, threshold, meta_config.num_threads)
+    elif selected == "deterministic":
+        meta_policy = None
+    else:
+        raise ValueError("unknown frozen entity-decision family")
     if tuple(model.feature_name()) != extractor.feature_names:
         raise ValueError("frozen model/feature schema mismatch")
     if not (test_work_dir / "store.sqlite").is_file():
@@ -169,11 +189,11 @@ def predict_test(
                 batch.append(query)
                 if len(batch) == batch_entities:
                     _write_batch(batch, extractor, model, decision,
-                                 matching_writer, candidate_writer)
+                                 matching_writer, candidate_writer, meta_policy)
                     batch.clear()
             if batch:
                 _write_batch(batch, extractor, model, decision,
-                             matching_writer, candidate_writer)
+                             matching_writer, candidate_writer, meta_policy)
         validate_outputs(connection, matching_tmp, candidate_tmp)
         os.replace(building, output_dir)
         return {"source1_rows": store.source_count,

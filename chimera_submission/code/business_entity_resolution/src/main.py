@@ -61,6 +61,9 @@ def _parser() -> argparse.ArgumentParser:
     train.add_argument("--boost-rounds", type=int, default=100)
     train.add_argument("--threads", type=int, default=4)
     train.add_argument("--seed", type=int, default=42)
+    train.add_argument("--evaluate-meta", action="store_true")
+    train.add_argument("--max-worst-fold-drop", type=float)
+    train.add_argument("--max-fold-std-increase", type=float)
     prepare = commands.add_parser("prepare-test", help="unlabeled test store/retrieval")
     prepare.add_argument("--test-dir", type=Path, required=True)
     prepare.add_argument("--model-dir", type=Path, required=True)
@@ -95,6 +98,9 @@ def main(argv: list[str] | None = None) -> None:
             folds=args.folds, grid_points=args.grid_points,
             feature_max_features=args.feature_max_features,
             seed=args.seed, model=model,
+            evaluate_meta=args.evaluate_meta,
+            max_worst_fold_drop=args.max_worst_fold_drop,
+            max_fold_std_increase=args.max_fold_std_increase,
         )
         connection, store = _training_store(
             args.phase4_work, args.top_k, args.max_candidates,

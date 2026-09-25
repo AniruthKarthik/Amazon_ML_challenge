@@ -8,7 +8,8 @@ from pathlib import Path
 from src.entity_meta_model import (
     MetaModelConfig, compare_meta_to_phase10, entity_meta_features,
     generate_meta_oof_decisions, load_meta_artifact,
-    meta_feature_vector, predict_frozen_meta, predict_meta_match_set, save_meta_artifact,
+    meta_feature_vector, predict_frozen_meta, predict_frozen_meta_batch,
+    predict_meta_match_set, save_meta_artifact,
     save_meta_report,
 )
 from src.threshold_policy import FrozenDecisionConfig
@@ -60,6 +61,20 @@ class MetaDecisionTests(unittest.TestCase):
         empty = OOFEntity("empty", (), (), frozenset({"a"}), 0, "US")
         self.assertEqual(entity_meta_features(empty).tolist(), [0] * 7)
         self.assertEqual(meta_feature_vector("x", ["a", "a"], [0.1, 0.9])[0], 1)
+
+    def test_batched_frozen_predictions_match_individual_calls(self):
+        entities = fixture()
+        result = generate_meta_oof_decisions(entities, (0.5, 0.8))
+        rows = [(entity.source_id, entity.candidate_ids, entity.scores)
+                for entity in entities]
+        batch = predict_frozen_meta_batch(
+            result.final_model, rows, result.frozen_multi_pair_threshold)
+        singles = [predict_frozen_meta(
+            result.final_model, ids, scores, result.frozen_multi_pair_threshold)
+            for _, ids, scores in rows]
+        self.assertEqual(batch, singles)
+        self.assertEqual(predict_frozen_meta_batch(
+            result.final_model, [], result.frozen_multi_pair_threshold), [])
 
 
 class MetaOOFTests(unittest.TestCase):

@@ -146,6 +146,7 @@
 - [x] Implement exact mapping: ZERO → empty; ONE → top-1; MANY → all pair scores `>= multi_pair_threshold`, with top-1 fallback when none pass. MANY does not force a second match.
 - [x] Tune `multi_pair_threshold` using exact entity macro F₀.₅ on inner OOF predictions; serialize the frozen model and threshold for unchanged inference.
 - [x] Implement identical-fold comparison against Phase 10's locked deterministic family, with explicit worst-fold and fold-dispersion tolerances; synthetic unit tests cover rules, leakage isolation, and serialization.
+- [x] Wire the optional Phase 12 OOF comparison into the CPU training runner and route frozen inference through the selected deterministic or meta policy; require caller-supplied robustness tolerances and test both inference paths on synthetic data.
 - [ ] Run the full OOF CPU experiment, Phase 10 deterministic comparison, robustness assessment, and keep/reject decision. No project-data model run has occurred locally.
 **Decision Gate:** Keep the meta-model only if its cross-fitted entity F₀.₅ improves without a material worst-fold or dispersion regression.
 

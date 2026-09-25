@@ -1,5 +1,6 @@
 """Tiny frozen-inference integration tests using unlabeled synthetic test TSVs."""
 
+import json
 import shutil
 import subprocess
 import sys
@@ -9,11 +10,13 @@ from pathlib import Path
 
 from src.cpu_inference import prepare_test_retrieval, predict_test, validate_outputs
 from src.cpu_training import CPUTrainingConfig, train_cpu_baseline
+from src.entity_meta_model import generate_meta_oof_decisions, save_meta_artifact
 from src.main import main
 from src.pair_model import BaselineConfig
 from src.phase4_store import open_store
 from src.pipeline_store import DiskCandidateStore
 from tests.test_cpu_training import CPUTrainingTests
+from tests.test_entity_meta_model import fixture as meta_fixture
 
 
 class CPUInferenceTests(unittest.TestCase):
@@ -71,6 +74,20 @@ class CPUInferenceTests(unittest.TestCase):
                 "--test-dir", str(test_dir), "--check-ids",
             ], capture_output=True, text=True, check=False)
             self.assertEqual(official.returncode, 0, official.stdout + official.stderr)
+            report_path = root / "model" / "training_report.json"
+            report = json.loads(report_path.read_text())
+            report["selected_entity_decision"] = "meta"
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            meta = generate_meta_oof_decisions(meta_fixture(), (0.5, 0.8))
+            save_meta_artifact(root / "model" / "meta_model.joblib", meta)
+            predict_test(root / "model", work, root / "meta_output",
+                         batch_entities=3, allow_exploratory=True)
+            connection = open_store(work / "store.sqlite")
+            self.assertEqual(validate_outputs(
+                connection, root / "meta_output" / "matching_results.tsv",
+                root / "meta_output" / "candidate_pairs.tsv",
+            )["source1_rows"], 9)
+            connection.close()
             with self.assertRaises(FileExistsError):
                 predict_test(root / "model", work, root / "output",
                              allow_exploratory=True)

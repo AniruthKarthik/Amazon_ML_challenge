@@ -8,10 +8,12 @@ each S2/S3 target to have at most one S1 owner.
 from __future__ import annotations
 
 import json
+import math
 import os
 import random
 import sqlite3
 from dataclasses import asdict, dataclass
+from numbers import Real
 from pathlib import Path
 
 import joblib
@@ -19,6 +21,10 @@ import lightgbm as lgb
 import numpy as np
 from sklearn.model_selection import GroupKFold
 
+from .entity_meta_model import (
+    MetaModelConfig, compare_meta_to_phase10, generate_meta_oof_decisions,
+    save_meta_artifact, save_meta_report,
+)
 from .pair_features import PairFeatureExtractor
 from .pair_model import BaselineConfig, train_pair_baseline
 from .oof_ranking import evaluate_oof_ranking
@@ -40,6 +46,9 @@ class CPUTrainingConfig:
     seed: int = 42
     sensitivity_delta: float = 0.05
     country_min_entities: int = 100
+    evaluate_meta: bool = False
+    max_worst_fold_drop: float | None = None
+    max_fold_std_increase: float | None = None
     model: BaselineConfig = BaselineConfig(
         num_boost_round=100, early_stopping_rounds=0, num_threads=4,
     )
@@ -51,6 +60,13 @@ class CPUTrainingConfig:
             raise ValueError("training limits must be positive and folds >= 3")
         if self.model.early_stopping_rounds:
             raise ValueError("OOF boosting rounds must not use heldout early stopping")
+        if self.evaluate_meta:
+            for value in (self.max_worst_fold_drop, self.max_fold_std_increase):
+                if isinstance(value, bool) or not isinstance(value, Real) or \
+                   not math.isfinite(value) or value < 0:
+                    raise ValueError("meta robustness tolerances must be explicit and nonnegative")
+        elif self.max_worst_fold_drop is not None or self.max_fold_std_increase is not None:
+            raise ValueError("meta robustness tolerances require evaluate_meta")
 
 
 def select_source_sequences(source_count: int, count: int, seed: int) -> tuple[int, ...]:
@@ -215,6 +231,19 @@ def train_cpu_baseline(
                        sensitivity, country_shift)
     save_frozen_config(building / "decision_config.json",
                        search.frozen_config)
+    selected_entity_decision = "deterministic"
+    if config.evaluate_meta:
+        meta_result = generate_meta_oof_decisions(
+            oof_entities, grid.pair, MetaModelConfig(num_threads=config.model.num_threads))
+        comparison = compare_meta_to_phase10(
+            oof_entities, meta_result,
+            search.policies[search.selected_policy].fold_configs,
+            config.max_worst_fold_drop, config.max_fold_std_increase,
+        )
+        save_meta_report(building / "meta_comparison.json", meta_result, comparison)
+        if comparison.keep_meta:
+            save_meta_artifact(building / "meta_model.joblib", meta_result)
+            selected_entity_decision = "meta"
     final_extractor = PairFeatureExtractor.fit_from_records(
         _record_factory(store, sequences), channels=store.channels,
         max_features=config.feature_max_features,
@@ -254,6 +283,7 @@ def train_cpu_baseline(
         "fold_pair_diagnostics": fold_diagnostics,
         "oof_retrieved_pair_ranking": ranking,
         "selected_policy": search.selected_policy,
+        "selected_entity_decision": selected_entity_decision,
         "selected_crossfit_metrics": asdict(
             search.policies[search.selected_policy].crossfit_metrics),
         "config": asdict(config),

@@ -104,6 +104,34 @@ class CPUTrainingTests(unittest.TestCase):
                 train_cpu_baseline(store, root / "model", config)
             connection.close()
 
+    def test_meta_comparison_is_explicit_and_can_be_rejected(self):
+        with self.assertRaises(ValueError):
+            CPUTrainingConfig(train_entities=9, evaluate_meta=True)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            work = self._fixture(root)
+            connection = open_store(root / "store.sqlite")
+            result = train_cpu_baseline(
+                DiskCandidateStore(connection, work, 2, 2), root / "meta_model",
+                CPUTrainingConfig(
+                    train_entities=9, max_train_pairs=100, folds=3,
+                    grid_points=2, feature_max_features=100,
+                    country_min_entities=2, evaluate_meta=True,
+                    max_worst_fold_drop=0, max_fold_std_increase=0,
+                    model=BaselineConfig(num_boost_round=5,
+                                         early_stopping_rounds=0,
+                                         min_data_in_leaf=1, num_threads=1),
+                ),
+            )
+            comparison = json.loads((root / "meta_model" /
+                                     "meta_comparison.json").read_text())
+            self.assertEqual(result["selected_entity_decision"],
+                             "meta" if comparison["phase10_comparison"]["keep_meta"]
+                             else "deterministic")
+            self.assertEqual((root / "meta_model" / "meta_model.joblib").exists(),
+                             comparison["phase10_comparison"]["keep_meta"])
+            connection.close()
+
 
 if __name__ == "__main__":
     unittest.main()
