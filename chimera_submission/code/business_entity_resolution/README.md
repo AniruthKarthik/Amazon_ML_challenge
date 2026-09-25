@@ -62,3 +62,15 @@ channels complete. Completed channel stages are reused only with the same
 retrieval configuration. These training-wide results are exploratory, not
 cross-fitted model-selection estimates. Ranking failure analysis must wait
 for OOF LightGBM scores after Phases 7/8.
+
+## Phase 6: pair features
+
+`src.pair_features.PairFeatureExtractor` emits a fixed, numeric feature schema
+for each Phase 3 `Candidate`. It includes normalized edit distances, token and
+character TF-IDF similarity, numeric address overlap, country/missingness
+interactions, and per-channel retrieval provenance. Pass a repeatable,
+unlabeled, fold-appropriate record stream to `fit_from_records`; fit the TF-IDF
+encoders separately within each training fold when building OOF features.
+`transform` yields `(candidate, features)` pairs lazily, with no labels or
+ground-truth fields. Full-data feature materialization and timing are deferred
+to Colab after the retrieval decision.
