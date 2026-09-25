@@ -146,6 +146,7 @@ class PairFeatureExtractor:
         pairs_df: pd.DataFrame,
         s1_records: Dict[str, Dict[str, str]],
         cand_records: Dict[str, Dict[str, str]],
+        verbose: bool = True,
     ) -> pd.DataFrame:
         """Build pair features for each row in pairs_df.
 
@@ -154,14 +155,21 @@ class PairFeatureExtractor:
         pairs_df : pd.DataFrame with source1_entity_id, candidate_entity_id, and provenance columns.
         s1_records : Dict[entity_id, normalized_field_dict].
         cand_records : Dict[entity_id, normalized_field_dict].
+        verbose : bool indicating whether to print progress.
 
         Returns
         -------
         pd.DataFrame containing feature columns plus identifiers.
         """
         features_list = []
+        total_pairs = len(pairs_df)
+        log_interval = max(100, total_pairs // 50) if total_pairs > 0 else 1
 
-        for _, row in pairs_df.iterrows():
+        for idx, (_, row) in enumerate(pairs_df.iterrows()):
+            if verbose and ((idx + 1) % log_interval == 0 or (idx + 1) == total_pairs or (idx + 1) <= 5):
+                pct = (100.0 * (idx + 1) / total_pairs) if total_pairs > 0 else 100.0
+                print(f"\r  [Feature Extraction] {idx + 1}/{total_pairs} pairs ({pct:.1f}%)", end="", flush=True)
+
             s1_id = row["source1_entity_id"]
             cand_id = row["candidate_entity_id"]
 
@@ -318,6 +326,9 @@ class PairFeatureExtractor:
                 "feat_score_tfidf_addr": score_tfidf_addr,
                 "feat_score_rare_token": score_rare_token,
             })
+
+        if verbose and total_pairs > 0:
+            print(f"\r  [Feature Extraction] Completed {total_pairs}/{total_pairs} pairs (100.0%)               ")
 
         df = pd.DataFrame(features_list)
         # Strict NaN and Infinity assertions

@@ -55,6 +55,7 @@ class EntityMetaModel:
         entity_meta_df: pd.DataFrame,
         ground_truth: Dict[str, Set[str]],
         fold_map: Dict[str, int],
+        verbose: bool = True,
     ) -> pd.DataFrame:
         """Train cross-fitted entity meta-model to predict P(has_match).
 
@@ -63,6 +64,7 @@ class EntityMetaModel:
         entity_meta_df : pd.DataFrame with meta-features (one row per S1 entity).
         ground_truth : mapping source1_entity_id -> set of matched candidate IDs.
         fold_map : mapping source1_entity_id -> fold_id.
+        verbose : whether to display live training progress status.
 
         Returns
         -------
@@ -81,13 +83,14 @@ class EntityMetaModel:
         ]
 
         unique_folds = sorted(df["fold"].unique())
+        n_folds = len(unique_folds)
         oof_probs = np.zeros(len(df), dtype=np.float32)
 
         X_all = df[self.meta_feature_cols].to_numpy(dtype=np.float32)
         y_all = df["target_has_match"].to_numpy(dtype=np.float32)
 
         self.models = []
-        for fold_id in unique_folds:
+        for fold_idx, fold_id in enumerate(unique_folds, start=1):
             val_idx = df["fold"] == fold_id
             train_idx = ~val_idx
 
@@ -100,7 +103,24 @@ class EntityMetaModel:
                 self.models.append(model)
                 continue
 
-            model.fit(X_train, y_train)
+            n_trees = self.lgb_params.get("n_estimators", 60)
+            callbacks = []
+            if verbose:
+                def progress_cb(env):
+                    curr = env.iteration + 1
+                    total = env.end_iteration or n_trees
+                    pct = 100.0 * curr / total
+                    print(
+                        f"\r  [Meta-Model Fold {fold_idx}/{n_folds}] Tree {curr}/{total} ({pct:.1f}%)",
+                        end="",
+                        flush=True,
+                    )
+                callbacks.append(progress_cb)
+
+            model.fit(X_train, y_train, callbacks=callbacks)
+            if verbose:
+                print(f"\r  [Meta-Model Fold {fold_idx}/{n_folds}] Completed {n_trees}/{n_trees} trees.            ")
+
             self.models.append(model)
             val_preds = model.predict_proba(X_val)[:, 1]
             oof_probs[val_idx] = val_preds

@@ -160,8 +160,13 @@ class CandidateRetriever:
         self._is_fitted = True
         return self
 
-    def retrieve(self, s1_df: pd.DataFrame) -> Dict[str, Dict[str, CandidateProvenance]]:
+    def retrieve(self, s1_df: pd.DataFrame, verbose: bool = True) -> Dict[str, Dict[str, CandidateProvenance]]:
         """Retrieve candidates for all S1 entities across all channels.
+
+        Parameters
+        ----------
+        s1_df : pd.DataFrame with normalized S1 entities.
+        verbose : whether to display live channel progress status.
 
         Returns
         -------
@@ -174,8 +179,14 @@ class CandidateRetriever:
             s1_id: {} for s1_id in s1_df["entity_id"]
         }
 
-        # --- Channel 1 & 2: Exact Name & Exact Core Name ---
-        for _, row in s1_df.iterrows():
+        # --- Channel 1 & 2: Exact Name, Exact Core Name, and Rare Tokens ---
+        total_s1 = len(s1_df)
+        log_s1 = max(200, total_s1 // 20) if total_s1 > 0 else 1
+        for idx, (_, row) in enumerate(s1_df.iterrows()):
+            if verbose and ((idx + 1) % log_s1 == 0 or (idx + 1) == total_s1 or (idx + 1) <= 5):
+                pct = 100.0 * (idx + 1) / total_s1 if total_s1 > 0 else 100.0
+                print(f"\r  [Candidate Retrieval 1/4: Exact & Rare] {idx + 1}/{total_s1} entities ({pct:.1f}%)", end="", flush=True)
+
             s1_id = row["entity_id"]
             clean_name = row.get("name_clean", "")
             core_name = row.get("name_core", "")
@@ -206,6 +217,9 @@ class CandidateRetriever:
                         prov.scores.setdefault("rare_token", 0.5)
                         prov.ranks.setdefault("rare_token", 1)
 
+        if verbose and total_s1 > 0:
+            print(f"\r  [Candidate Retrieval 1/4: Exact & Rare] Completed {total_s1}/{total_s1} entities.         ")
+
         # --- Channel 3: Char TF-IDF Name KNN (Batched Matrix Multiplication) ---
         if self._name_vectorizer and self._target_name_matrix is not None:
             s1_names = s1_df["name_clean"].fillna("").tolist()
@@ -213,7 +227,13 @@ class CandidateRetriever:
             sim_mat = s1_name_mat.dot(self._target_name_matrix.T)
 
             s1_ids = s1_df["entity_id"].tolist()
-            for row_idx in range(sim_mat.shape[0]):
+            n_rows = sim_mat.shape[0]
+            log_knn = max(200, n_rows // 20) if n_rows > 0 else 1
+            for row_idx in range(n_rows):
+                if verbose and ((row_idx + 1) % log_knn == 0 or (row_idx + 1) == n_rows or (row_idx + 1) <= 5):
+                    pct = 100.0 * (row_idx + 1) / n_rows if n_rows > 0 else 100.0
+                    print(f"\r  [Candidate Retrieval 2/4: Char TF-IDF] {row_idx + 1}/{n_rows} queries ({pct:.1f}%)", end="", flush=True)
+
                 s1_id = s1_ids[row_idx]
                 row_sim = sim_mat.getrow(row_idx)
                 if row_sim.nnz == 0:
@@ -245,6 +265,9 @@ class CandidateRetriever:
                         prov.scores["tfidf_name"] = score
                         prov.ranks["tfidf_name"] = rank
 
+            if verbose and n_rows > 0:
+                print(f"\r  [Candidate Retrieval 2/4: Char TF-IDF] Completed {n_rows}/{n_rows} queries.         ")
+
         # --- Channel 4: Char TF-IDF Address KNN ---
         if self._addr_vectorizer and self._target_addr_matrix is not None:
             s1_addrs = s1_df["address_clean"].fillna("").tolist()
@@ -255,7 +278,13 @@ class CandidateRetriever:
                 s1_addr_mat = self._addr_vectorizer.transform(sub_addrs)
                 sim_addr_mat = s1_addr_mat.dot(self._target_addr_matrix.T)
 
+                n_addr = len(non_empty_indices)
+                log_addr = max(200, n_addr // 20) if n_addr > 0 else 1
                 for local_idx, orig_idx in enumerate(non_empty_indices):
+                    if verbose and ((local_idx + 1) % log_addr == 0 or (local_idx + 1) == n_addr or (local_idx + 1) <= 5):
+                        pct = 100.0 * (local_idx + 1) / n_addr
+                        print(f"\r  [Candidate Retrieval 3/4: Address TF-IDF] {local_idx + 1}/{n_addr} queries ({pct:.1f}%)", end="", flush=True)
+
                     s1_id = s1_df["entity_id"].iloc[orig_idx]
                     row_sim = sim_addr_mat.getrow(local_idx)
                     if row_sim.nnz == 0:
@@ -284,6 +313,9 @@ class CandidateRetriever:
                             prov.scores["tfidf_addr"] = score
                             prov.ranks["tfidf_addr"] = rank
 
+                if verbose and n_addr > 0:
+                    print(f"\r  [Candidate Retrieval 3/4: Address TF-IDF] Completed {n_addr}/{n_addr} queries.     ")
+
         # --- Channel 6: Word TF-IDF Name KNN (Conditional) ---
         if self.enable_word_tfidf and self._word_vectorizer and self._target_word_matrix is not None:
             s1_names = s1_df["name_clean"].fillna("").tolist()
@@ -291,7 +323,13 @@ class CandidateRetriever:
             sim_word_mat = s1_word_mat.dot(self._target_word_matrix.T)
 
             s1_ids = s1_df["entity_id"].tolist()
-            for row_idx in range(sim_word_mat.shape[0]):
+            n_word = sim_word_mat.shape[0]
+            log_word = max(200, n_word // 20) if n_word > 0 else 1
+            for row_idx in range(n_word):
+                if verbose and ((row_idx + 1) % log_word == 0 or (row_idx + 1) == n_word or (row_idx + 1) <= 5):
+                    pct = 100.0 * (row_idx + 1) / n_word if n_word > 0 else 100.0
+                    print(f"\r  [Candidate Retrieval 4/4: Word TF-IDF] {row_idx + 1}/{n_word} queries ({pct:.1f}%)", end="", flush=True)
+
                 s1_id = s1_ids[row_idx]
                 row_sim = sim_word_mat.getrow(row_idx)
                 if row_sim.nnz == 0:
@@ -320,6 +358,9 @@ class CandidateRetriever:
                         prov.scores["tfidf_word"] = score
                         prov.ranks["tfidf_word"] = rank
 
+            if verbose and n_word > 0:
+                print(f"\r  [Candidate Retrieval 4/4: Word TF-IDF] Completed {n_word}/{n_word} queries.         ")
+
         # Deduplicate and Cap Candidates per S1 entity
         for s1_id, target_map in results.items():
             if len(target_map) > self.max_candidates_per_entity:
@@ -337,6 +378,10 @@ class CandidateRetriever:
                     reverse=True,
                 )[: self.max_candidates_per_entity]
                 results[s1_id] = dict(sorted_targets)
+
+        total_candidates = sum(len(cands) for cands in results.values())
+        if verbose:
+            print(f"  [Candidate Retrieval] Collected {total_candidates} candidate pairs across {len(results)} entities.")
 
         return results
 

@@ -101,7 +101,7 @@ def main() -> int:
     out_path.mkdir(parents=True, exist_ok=True)
 
     # 1. Load Training Data
-    print("\n[Phase 1] Loading and validating training data...")
+    print("\n[Step 1/5] Loading and validating training data...")
     print(f"  Resolved Train Path: {train_path}")
     print(f"  Resolved Test Path:  {test_path}")
 
@@ -121,19 +121,20 @@ def main() -> int:
     )
 
     # 2. Fit Pipeline & Cross-Validate
-    print("\n[Phase 2-10] Fitting pipeline & optimizing robust decision thresholds...")
+    print("\n[Step 2/5] Fitting pipeline, cross-fitting models & optimizing robust thresholds...")
     config = PipelineConfig(k_folds=args.k_folds, random_seed=args.seed)
     pipeline = BusinessEntityResolutionPipeline(config=config)
     pipeline.fit(train_s1, train_s2, train_s3, gt_df)
 
     rep = pipeline.ablation_report
-    print(f"  OOF Pair AUC:            {rep.get('pair_auc', 0.0):.4f}")
-    print(f"  OOF Pair PR-AUC:         {rep.get('pair_pr_auc', 0.0):.4f}")
+    print("\n  --- Cross-Validation Metrics & Locked Decision Policy ---")
+    print(f"  OOF Pair AUC:             {rep.get('pair_auc', 0.0):.4f}")
+    print(f"  OOF Pair PR-AUC:          {rep.get('pair_pr_auc', 0.0):.4f}")
     print(f"  Locked Robust Macro F0.5: {rep.get('best_macro_f05', 0.0):.4f}")
-    print(f"  Locked Decision Policy:  {rep.get('locked_policy')}")
+    print(f"  Locked Decision Policy:   {rep.get('locked_policy')}")
 
     # 3. Load Test Data
-    print("\n[Phase 16] Loading and validating test data...")
+    print("\n[Step 3/5] Loading and validating test data...")
     test_s1_file = test_path / "test_source1.tsv"
     test_s2_file = test_path / "test_source2.tsv"
     test_s3_file = test_path / "test_source3.tsv"
@@ -146,10 +147,11 @@ def main() -> int:
     )
 
     # 4. Predict
-    print("\n[Phase 16] Executing frozen inference on test set...")
+    print("\n[Step 4/5] Executing frozen inference on test set...")
     matching_df, candidates_df = pipeline.predict(test_s1, test_s2, test_s3)
 
     # 5. Export Results
+    print("\n[Step 5/5] Exporting official submission TSVs...")
     matching_out = out_path / "matching_results.tsv"
     candidates_out = out_path / "candidate_pairs.tsv"
 

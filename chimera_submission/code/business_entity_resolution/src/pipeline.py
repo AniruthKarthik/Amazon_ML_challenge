@@ -55,7 +55,7 @@ class PipelineConfig:
     min_tfidf_score: float = 0.25
     enable_word_tfidf: bool = True
     max_candidates_per_entity: int = 60
-    lgb_n_estimators: int = 150
+    lgb_n_estimators: int = 120
     lgb_learning_rate: float = 0.08
     lgb_max_depth: int = 6
     lgb_num_leaves: int = 31
@@ -85,6 +85,7 @@ class BusinessEntityResolutionPipeline:
     ) -> BusinessEntityResolutionPipeline:
         """Fit all pipeline stages on training data using leak-free cross-fitting."""
         # 1. Multi-view Normalization
+        print("\n  [Stage 1/6] Multi-View Normalization...")
         s1_norm = TextNormalizer.normalize_dataframe(train_s1_df)
         s2_norm = TextNormalizer.normalize_dataframe(train_s2_df)
         s3_norm = TextNormalizer.normalize_dataframe(train_s3_df)
@@ -94,6 +95,7 @@ class BusinessEntityResolutionPipeline:
         s1_country_map = dict(zip(s1_norm["entity_id"], s1_norm["country"]))
 
         # 2. Build Bipartite Graph & Leak-Free Folds (Phase 1)
+        print("\n  [Stage 2/6] Bipartite Graph Analysis & Leak-Free Folds...")
         graph_analyzer = BipartiteGraphAnalyzer(ground_truth_df, all_s1_ids=all_s1_ids)
         fold_map = graph_analyzer.create_leak_free_folds(
             k_folds=self.config.k_folds, random_seed=self.config.random_seed
@@ -108,6 +110,7 @@ class BusinessEntityResolutionPipeline:
             ground_truth[s1] = targets
 
         # 3. Candidate Retrieval (Phase 3 & 5)
+        print("\n  [Stage 3/6] Multi-Channel Candidate Retrieval...")
         from chimera_submission.code.business_entity_resolution.src.retrieval import (
             CandidateRetriever,
         )
@@ -125,6 +128,7 @@ class BusinessEntityResolutionPipeline:
         pairs_df = self.retriever.to_dataframe(candidates_raw)
 
         # 4. Feature Extraction (Phase 6)
+        print("\n  [Stage 4/6] Tabular Pair Feature Engineering...")
         s1_records = s1_norm.set_index("entity_id").to_dict(orient="index")
         target_records = target_norm.set_index("entity_id").to_dict(orient="index")
 
@@ -134,6 +138,7 @@ class BusinessEntityResolutionPipeline:
         self.feature_cols = [c for c in feats_df.columns if c.startswith("feat_")]
 
         # 5. Train LightGBM Pair Scorer with OOF Predictions (Phase 7 & 8)
+        print("\n  [Stage 5/6] Cross-Fitting LightGBM Pair Models & OOF Inference...")
         self.pair_scorer = PairScorer(
             lgb_params={
                 "objective": "binary",
@@ -152,6 +157,7 @@ class BusinessEntityResolutionPipeline:
         )
 
         # 6. Joint Threshold Optimization & Robust Policy Selection (Phase 9 & 10)
+        print("\n  [Stage 6/6] Robust Joint Threshold Optimization & Plateau Testing...")
         opt_report = ThresholdOptimizer.optimize(
             scored_pairs_df=oof_res.oof_pairs_df,
             ground_truth=ground_truth,
@@ -193,6 +199,7 @@ class BusinessEntityResolutionPipeline:
             raise RuntimeError("Pipeline must be fit before running predict.")
 
         # 1. Multi-view Normalization
+        print("\n  [Inference Stage 1/4] Normalizing Test Entities...")
         s1_norm = TextNormalizer.normalize_dataframe(test_s1_df)
         s2_norm = TextNormalizer.normalize_dataframe(test_s2_df)
         s3_norm = TextNormalizer.normalize_dataframe(test_s3_df)
@@ -202,6 +209,7 @@ class BusinessEntityResolutionPipeline:
         s1_country_map = dict(zip(s1_norm["entity_id"], s1_norm["country"]))
 
         # 2. Candidate Retrieval on Test Target Corpus
+        print("\n  [Inference Stage 2/4] Multi-Channel Candidate Retrieval on Test Corpus...")
         from chimera_submission.code.business_entity_resolution.src.retrieval import (
             CandidateRetriever,
         )
@@ -230,6 +238,7 @@ class BusinessEntityResolutionPipeline:
             return matching_results_df, candidate_pairs_df
 
         # 3. Feature Extraction
+        print("\n  [Inference Stage 3/4] Pair Feature Extraction on Test Candidates...")
         s1_records = s1_norm.set_index("entity_id").to_dict(orient="index")
         target_records = target_norm.set_index("entity_id").to_dict(orient="index")
 
@@ -238,6 +247,7 @@ class BusinessEntityResolutionPipeline:
         )
 
         # 4. Ensemble Pair Scoring
+        print("\n  [Inference Stage 4/4] Bagged Ensemble Pair Scoring & Applying Locked Policy...")
         scores = self.pair_scorer.predict(feats_df, use_calibrated=False)
         feats_df["raw_score"] = scores
 

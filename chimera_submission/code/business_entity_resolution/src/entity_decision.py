@@ -182,6 +182,7 @@ class ThresholdOptimizer:
         pair_threshold_grid: Optional[List[float]] = None,
         entity_threshold_grid: Optional[List[float]] = None,
         gap_threshold_grid: Optional[List[float]] = None,
+        verbose: bool = True,
     ) -> ThresholdOptimizationReport:
         """Jointly optimize pair, entity, and gap thresholds on OOF predictions."""
         # 1. Compare Raw vs Calibrated performance
@@ -200,7 +201,12 @@ class ThresholdOptimizer:
         e_grid = entity_threshold_grid or [0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80]
         g_grid = gap_threshold_grid or [0.08, 0.12, 0.15, 0.20, 0.25]
 
-        for sc in score_cols_to_check:
+        valid_combos = [
+            (p, e, g) for p in p_grid for e in e_grid if e >= p for g in g_grid
+        ]
+        total_combos = len(valid_combos)
+
+        for sc_idx, sc in enumerate(score_cols_to_check, start=1):
             _, cands_by_s1 = EntityAggregator.aggregate_entity_candidates(
                 scored_pairs_df, all_s1_ids, score_col=sc
             )
@@ -208,22 +214,28 @@ class ThresholdOptimizer:
             best_sc_f05 = -1.0
             best_sc_policy = None
 
-            for p_th in p_grid:
-                for e_th in e_grid:
-                    if e_th < p_th:
-                        continue  # entity threshold should be >= pair threshold
-                    for g_th in g_grid:
-                        pol = EntityDecisionPolicy(
-                            pair_threshold=p_th,
-                            entity_threshold=e_th,
-                            gap_threshold=g_th,
-                        )
-                        preds = EntityAggregator.apply_policy(cands_by_s1, pol, all_s1_ids)
-                        score = MetricsEvaluator.compute_macro_f05(preds, ground_truth, all_s1_ids)
+            for idx, (p_th, e_th, g_th) in enumerate(valid_combos, start=1):
+                if verbose and (idx % 15 == 0 or idx == total_combos or idx <= 5):
+                    pct = 100.0 * idx / total_combos
+                    print(
+                        f"\r  [Threshold Search {sc_idx}/{len(score_cols_to_check)}: {sc}] Combo {idx}/{total_combos} ({pct:.1f}%) | Best F0.5: {best_sc_f05:.4f}",
+                        end="",
+                        flush=True,
+                    )
+                pol = EntityDecisionPolicy(
+                    pair_threshold=p_th,
+                    entity_threshold=e_th,
+                    gap_threshold=g_th,
+                )
+                preds = EntityAggregator.apply_policy(cands_by_s1, pol, all_s1_ids)
+                score = MetricsEvaluator.compute_macro_f05(preds, ground_truth, all_s1_ids)
 
-                        if score > best_sc_f05:
-                            best_sc_f05 = score
-                            best_sc_policy = pol
+                if score > best_sc_f05:
+                    best_sc_f05 = score
+                    best_sc_policy = pol
+
+            if verbose:
+                print(f"\r  [Threshold Search {sc_idx}/{len(score_cols_to_check)}: {sc}] Completed {total_combos}/{total_combos} combos | Best F0.5: {best_sc_f05:.4f}    ")
 
             raw_vs_cal[sc] = best_sc_f05
             if best_sc_f05 > best_overall_score:

@@ -38,7 +38,7 @@ class PairScorer:
             "objective": "binary",
             "metric": "binary_logloss",
             "boosting_type": "gbdt",
-            "n_estimators": 150,
+            "n_estimators": 120,
             "learning_rate": 0.08,
             "num_leaves": 31,
             "max_depth": 6,
@@ -59,6 +59,7 @@ class PairScorer:
         feature_cols: List[str],
         fold_map: Dict[str, int],
         ground_truth: Dict[str, Set[str]],
+        verbose: bool = True,
     ) -> OOFResult:
         """Perform strict leak-free out-of-fold (OOF) cross-validation.
 
@@ -68,6 +69,7 @@ class PairScorer:
         feature_cols : list of feature column names to feed to LightGBM.
         fold_map : mapping source1_entity_id -> fold_id.
         ground_truth : mapping source1_entity_id -> set of true matched candidate IDs.
+        verbose : whether to display live training progress status.
 
         Returns
         -------
@@ -103,7 +105,7 @@ class PairScorer:
         X_all = df[feature_cols].to_numpy(dtype=np.float32)
         y_all = df["target"].to_numpy(dtype=np.float32)
 
-        for fold_id in unique_folds:
+        for fold_idx, fold_id in enumerate(unique_folds, start=1):
             val_idx = df["fold"] == fold_id
             train_idx = ~val_idx
 
@@ -119,7 +121,24 @@ class PairScorer:
                 self.models.append(model)
                 continue
 
-            model.fit(X_train, y_train)
+            n_trees = self.lgb_params.get("n_estimators", 120)
+            callbacks = []
+            if verbose:
+                def progress_cb(env):
+                    curr = env.iteration + 1
+                    total = env.end_iteration or n_trees
+                    pct = 100.0 * curr / total
+                    print(
+                        f"\r  [Training Fold {fold_idx}/{n_folds}] Tree {curr}/{total} ({pct:.1f}%)",
+                        end="",
+                        flush=True,
+                    )
+                callbacks.append(progress_cb)
+
+            model.fit(X_train, y_train, callbacks=callbacks)
+            if verbose:
+                print(f"\r  [Training Fold {fold_idx}/{n_folds}] Completed {n_trees}/{n_trees} trees.            ")
+
             self.models.append(model)
 
             val_preds = model.predict_proba(X_val)[:, 1]
