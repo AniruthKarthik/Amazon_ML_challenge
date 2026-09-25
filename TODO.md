@@ -44,12 +44,12 @@
 ## Phase 4: Retrieval Benchmark + Error Taxonomy
 
 **Objective:** Measure whether base lexical retrieval recovers ground-truth candidates, and explicitly quantify retrieval vs ranking failures.
-- [ ] Calculate Micro candidate recall and Entity complete/any-hit recall.
-- [ ] Calculate Oracle entity-level F₀.₅ (assumes perfect pair classification).
-- [ ] Calculate explicit retrieval diversity matrix measuring **Unique GT Recovered** per channel (How many true matches does this channel recover that existing channels missed?).
-- [ ] Calculate explicit **Retrieval miss rate** = `(GT pairs absent from candidate set) / (all GT pairs)`.
-- [ ] Calculate explicit **Ranking failure rate** = `(GT pairs present in candidate set but failing ranking criterion) / (GT pairs present in candidate set)`.
-- [ ] Sample 500-1000 missed ground-truth links and classify by qualitative error taxonomy.
+- [x] Calculate Micro candidate recall and Entity complete/any-hit recall.
+- [x] Calculate Oracle entity-level F₀.₅ (assumes perfect pair classification).
+- [x] Calculate explicit retrieval diversity matrix measuring **Unique GT Recovered** per channel (How many true matches does this channel recover that existing channels missed?).
+- [x] Calculate explicit **Retrieval miss rate** = `(GT pairs absent from candidate set) / (all GT pairs)`.
+- [x] Calculate explicit **Ranking failure rate** = `(GT pairs present in candidate set but failing ranking criterion) / (GT pairs present in candidate set)`.
+- [x] Sample 500-1000 missed ground-truth links and classify by qualitative error taxonomy.
 **Metrics:** Oracle F₀.₅, Unique GT Recovered per channel, Retrieval Miss Rate, Ranking Failure Rate.
 **Acceptance Criteria:** Explicit quantitative error metric report produced.
 **Decision Gate:** 
