@@ -1,10 +1,12 @@
 """One-command provisional workflow and safe reuse on tiny synthetic TSVs."""
 
 import fcntl
+import io
 import json
 import shutil
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from dataclasses import replace
 from pathlib import Path
 
@@ -50,14 +52,27 @@ class CPUWorkflowTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "explicit"):
                 run_cpu_workflow(self._config(root, allow=False))
             self.assertFalse((root / "work").exists())
-            first = run_cpu_workflow(self._config(root))
+            first_log = io.StringIO()
+            with redirect_stdout(first_log):
+                first = run_cpu_workflow(self._config(root))
+            self.assertIn("[1/19] START Training store and input validation",
+                          first_log.getvalue())
+            self.assertIn("[19/19] DONE Test scoring, submission output, and validation",
+                          first_log.getvalue())
+            self.assertIn("test store: loading S1", first_log.getvalue())
             self.assertFalse(first["phase4_reused"])
             self.assertFalse(first["model_reused"])
             self.assertFalse(first["output_reused"])
             self.assertEqual(first["validated_output"]["source1_rows"], 9)
             self.assertIn("provisional", first["scope"])
             self.assertTrue((root / "output" / "output_manifest.json").exists())
-            second = run_cpu_workflow(self._config(root))
+            second_log = io.StringIO()
+            with redirect_stdout(second_log):
+                second = run_cpu_workflow(self._config(root))
+            self.assertIn("[1/19] REUSED Training store and input validation",
+                          second_log.getvalue())
+            self.assertIn("[19/19] REUSED Test scoring, submission output, and validation",
+                          second_log.getvalue())
             self.assertTrue(second["phase4_reused"])
             self.assertTrue(second["model_reused"])
             self.assertTrue(second["output_reused"])
@@ -102,6 +117,24 @@ class CPUWorkflowTests(unittest.TestCase):
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 with self.assertRaisesRegex(RuntimeError, "another CPU pipeline"):
                     run_cpu_workflow(self._config(root))
+
+    def test_optional_meta_adds_one_progress_stage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._inputs(root)
+            base = self._config(root)
+            config = replace(base, training=replace(
+                base.training, evaluate_meta=True,
+                max_worst_fold_drop=0, max_fold_std_increase=0,
+            ))
+            output = io.StringIO()
+            with redirect_stdout(output):
+                result = run_cpu_workflow(config)
+            self.assertIn("[12/20] START Optional ZERO/ONE/MANY meta-model comparison",
+                          output.getvalue())
+            self.assertIn("[20/20] DONE Test scoring, submission output, and validation",
+                          output.getvalue())
+            self.assertEqual(result["validated_output"]["source1_rows"], 9)
 
     def test_parallel_workflow_matches_serial_fixture_output(self):
         with tempfile.TemporaryDirectory() as directory:

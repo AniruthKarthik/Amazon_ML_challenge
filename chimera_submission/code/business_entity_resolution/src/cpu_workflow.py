@@ -21,6 +21,7 @@ from .phase4_store import open_store
 from .pipeline_store import DiskCandidateStore
 from .pipeline_provenance import model_code_sha256
 from .retrieval import CHANNELS, RetrievalConfig
+from .workflow_progress import WorkflowProgress
 
 
 TRAIN_FILES = (
@@ -190,6 +191,9 @@ def _workflow_lock(work_root: Path):
 
 
 def _run_locked(config: CPUWorkflowConfig) -> dict[str, object]:
+    total_steps = 16 + config.training.folds + int(config.training.evaluate_meta)
+    progress = WorkflowProgress(total_steps)
+    progress.detail("Starting provisional CPU pipeline; reused stages count as completed")
     phase4_work = config.phase4_work or config.work_root / "phase4-work"
     phase4_report = config.phase4_report or config.work_root / "phase4-report"
     model_dir = config.work_root / "model"
@@ -199,42 +203,56 @@ def _run_locked(config: CPUWorkflowConfig) -> dict[str, object]:
     shard_size = _shard_size(phase4_work, config.shard_size)
     phase4_ready = (phase4_report / "metrics.json").exists()
     if phase4_ready:
+        progress.detail("Checking completed training retrieval artifacts")
         train_hashes = _check_phase4_report(
             config.train_dir, phase4_report, phase4_work, retrieval, shard_size)
+        progress.reuse("Training store and input validation")
+        for channel in CHANNELS:
+            progress.reuse(f"Training retrieval: {channel}")
+        progress.reuse("Training retrieval benchmark and report")
     else:
         if phase4_report.exists() and any(phase4_report.iterdir()):
             raise ValueError("partial Phase 4 report exists; preserve it for review")
         run_phase4(config.train_dir, phase4_report, phase4_work,
-                   retrieval, "all", shard_size, config.threads)
+                   retrieval, "all", shard_size, config.threads, progress=progress)
         fresh_hashes = json.loads((phase4_work / "training_inputs.json").read_text(
             encoding="utf-8"))
         train_hashes = _check_phase4_report(
             config.train_dir, phase4_report, phase4_work, retrieval, shard_size,
             current_hashes=fresh_hashes)
     if model_dir.exists():
+        progress.detail("Checking completed model artifacts")
         model_report = _check_model(model_dir, config, train_hashes)
         model_reused = True
+        for fold in range(config.training.folds):
+            progress.reuse(f"OOF LightGBM fold {fold + 1}/{config.training.folds}")
+        progress.reuse("OOF audit and entity threshold search")
+        if config.training.evaluate_meta:
+            progress.reuse("Optional ZERO/ONE/MANY meta-model comparison")
+        progress.reuse("Final sampled LightGBM model and training report")
     else:
         connection, store = open_training_candidate_store(
             phase4_work, config.top_k, config.max_candidates)
         try:
             model_report = train_cpu_baseline(
                 store, model_dir, config.training,
-                training_files_sha256=train_hashes)
+                training_files_sha256=train_hashes, progress=progress)
         finally:
             connection.close()
         model_reused = False
     test_counts = prepare_test_retrieval(
         config.test_dir, test_work, config.top_k, config.max_candidates,
         shard_size=_shard_size(test_work, config.test_shard_size),
-        threads=config.threads)
+        threads=config.threads, progress=progress)
+    progress.start("Test scoring, submission output, and validation")
     if config.output_dir.exists():
         validated = verify_inference_output(model_dir, test_work, config.output_dir)
         output_reused = True
     else:
         validated = predict_test(
             model_dir, test_work, config.output_dir,
-            batch_entities=config.batch_entities, allow_exploratory=True)
+            batch_entities=config.batch_entities, allow_exploratory=True,
+            progress=progress)
         output_reused = False
     if config.official_check_ids:
         validator = Path(__file__).resolve().parents[4] / "utils" / "validate_submission.py"
@@ -244,6 +262,8 @@ def _run_locked(config: CPUWorkflowConfig) -> dict[str, object]:
             "--candidate", str(config.output_dir / "candidate_pairs.tsv"),
             "--test-dir", str(config.test_dir), "--check-ids",
         ], check=True)
+    progress.finish(reused=output_reused)
+    progress.check_complete()
     return {
         "scope": "provisional sampled-training lexical baseline; not Phase 15 locked",
         "phase4_reused": phase4_ready,

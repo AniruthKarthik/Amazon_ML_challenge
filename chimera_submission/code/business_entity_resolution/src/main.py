@@ -19,6 +19,7 @@ from src.cpu_workflow import (
 )
 from src.pair_model import BaselineConfig
 from src.phase4_store import open_store
+from src.workflow_progress import WorkflowProgress
 
 
 def _add_training_options(parser: argparse.ArgumentParser) -> None:
@@ -110,6 +111,7 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     args = _parser().parse_args(argv)
     if args.command == "train":
+        progress = WorkflowProgress(args.folds + 2 + int(args.evaluate_meta))
         config = _training_config(args)
         connection, store = open_training_candidate_store(
             args.phase4_work, args.top_k, args.max_candidates,
@@ -121,9 +123,11 @@ def main(argv: list[str] | None = None) -> None:
             result = train_cpu_baseline(
                 store, args.model_dir, config,
                 training_files_sha256=json.loads(manifest.read_text(encoding="utf-8")),
+                progress=progress,
             )
         finally:
             connection.close()
+        progress.check_complete()
     elif args.command == "run":
         result = run_cpu_workflow(CPUWorkflowConfig(
             train_dir=args.train_dir, test_dir=args.test_dir,
@@ -138,21 +142,30 @@ def main(argv: list[str] | None = None) -> None:
             phase4_work=args.phase4_work, phase4_report=args.phase4_report,
         ))
     elif args.command == "prepare-test":
+        progress = WorkflowProgress(6)
         report = json.loads((args.model_dir / "training_report.json").read_text())
         result = prepare_test_retrieval(
             args.test_dir, args.test_work,
             int(report["retrieval_top_k"]),
             int(report["retrieval_max_candidates"]),
-            shard_size=args.shard_size, threads=args.threads,
+            shard_size=args.shard_size, threads=args.threads, progress=progress,
         )
+        progress.check_complete()
     elif args.command == "predict":
+        progress = WorkflowProgress(1)
+        progress.start("Test scoring, submission output, and validation")
         result = predict_test(
             args.model_dir, args.test_work, args.output_dir,
             batch_entities=args.batch_entities,
             allow_exploratory=args.allow_exploratory,
             dense_test_work_dir=args.dense_test_work,
+            progress=progress,
         )
+        progress.finish()
+        progress.check_complete()
     else:
+        progress = WorkflowProgress(1)
+        progress.start("Validate existing submission output")
         if not (args.test_work / "store.sqlite").is_file():
             raise FileNotFoundError(args.test_work / "store.sqlite")
         connection = open_store(args.test_work / "store.sqlite")
@@ -173,6 +186,8 @@ def main(argv: list[str] | None = None) -> None:
                 "--candidate", str(args.output_dir / "candidate_pairs.tsv"),
                 "--test-dir", str(args.test_dir), "--check-ids",
             ], check=True)
+        progress.finish()
+        progress.check_complete()
     print(json.dumps(result, indent=2, sort_keys=True), flush=True)
 
 

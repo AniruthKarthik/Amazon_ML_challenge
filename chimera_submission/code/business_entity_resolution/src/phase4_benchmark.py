@@ -23,6 +23,7 @@ from .phase4_store import (
 )
 from .phase4_taxonomy import classify_retrieval_miss
 from .retrieval import CHANNELS, RetrievalConfig
+from .workflow_progress import WorkflowProgress
 
 
 class _TargetMetadata:
@@ -94,7 +95,8 @@ def _stage_config(channel: str, config: RetrievalConfig, shard_size: int) -> dic
 
 
 def run_channel(connection: sqlite3.Connection, channel: str, work_dir: Path,
-                config: RetrievalConfig, shard_size: int, threads: int) -> None:
+                config: RetrievalConfig, shard_size: int, threads: int) -> bool:
+    """Build one channel, returning True when a completed artifact was reused."""
     path = _stage_path(work_dir, channel)
     marker = work_dir / f"{channel}.complete"
     stage_config = _stage_config(channel, config, shard_size)
@@ -104,7 +106,7 @@ def run_channel(connection: sqlite3.Connection, channel: str, work_dir: Path,
         if json.loads(marker.read_text(encoding="utf-8")) != stage_config:
             raise ValueError(f"cached {channel} channel uses a different configuration")
         print(f"reusing complete channel {channel}", flush=True)
-        return
+        return True
     # Only incomplete scratch outputs are replaced on a retry.
     for incomplete in (path, work_dir / f"{channel}.float32"):
         if incomplete.exists():
@@ -124,6 +126,7 @@ def run_channel(connection: sqlite3.Connection, channel: str, work_dir: Path,
         raise ValueError(channel)
     marker.write_text(json.dumps(stage_config, sort_keys=True), encoding="utf-8")
     print(f"completed channel {channel}", flush=True)
+    return False
 
 
 def evaluate(connection: sqlite3.Connection, work_dir: Path, output_dir: Path,
@@ -176,6 +179,9 @@ def evaluate(connection: sqlite3.Connection, work_dir: Path, output_dir: Path,
                     source_id, target_ids[target_seq].decode("utf-8"), int(bool(mask)),
                     ",".join(channel for channel in CHANNELS if mask & CHANNEL_BITS[channel]),
                 ))
+            if (seq + 1) % 250_000 == 0 or seq + 1 == source_count:
+                print(f"training benchmark: {seq + 1:,}/{source_count:,} "
+                      "S1 entities evaluated", flush=True)
     if next_truth is not None:
         raise ValueError("truth contains a source sequence outside the S1 table")
     os.replace(building_status, status_path)
@@ -290,10 +296,14 @@ def write_report(result: dict[str, object], output_dir: Path) -> None:
 
 
 def run(train_dir: Path, output_dir: Path, work_dir: Path,
-        config: RetrievalConfig, stage: str, shard_size: int, threads: int) -> None:
+        config: RetrievalConfig, stage: str, shard_size: int, threads: int,
+        progress: WorkflowProgress | None = None) -> None:
     work_dir.mkdir(parents=True, exist_ok=True)
     store_path = work_dir / "store.sqlite"
     manifest_path = work_dir / "training_inputs.json"
+    if progress is not None:
+        progress.start("Training store and input validation")
+    reused_store = store_path.exists()
     if not store_path.exists():
         print("building validated training store", flush=True)
         print(build_store(train_dir, store_path), flush=True)
@@ -308,13 +318,20 @@ def run(train_dir: Path, output_dir: Path, work_dir: Path,
             raise ValueError("training TSVs changed since the retrieval store was built")
     else:
         manifest_path.write_text(json.dumps(input_hashes, sort_keys=True), encoding="utf-8")
+    if progress is not None:
+        progress.finish(reused=reused_store)
     if stage == "store":
         return
     connection = open_store(store_path)
     channels = CHANNELS if stage in ("all", "metrics") else (stage,)
     if stage != "metrics":
         for channel in channels:
-            run_channel(connection, channel, work_dir, config, shard_size, threads)
+            if progress is not None:
+                progress.start(f"Training retrieval: {channel}")
+            reused = run_channel(connection, channel, work_dir, config,
+                                 shard_size, threads)
+            if progress is not None:
+                progress.finish(reused=reused)
     if stage in ("all", "metrics"):
         if not all((work_dir / f"{channel}.complete").exists() for channel in CHANNELS):
             raise RuntimeError("all five channels must be complete before metrics")
@@ -328,6 +345,8 @@ def run(train_dir: Path, output_dir: Path, work_dir: Path,
             if _stage_path(work_dir, channel).stat().st_size != source_count * config.top_k * 4:
                 raise ValueError(f"cached {channel} channel has an unexpected size")
         print("evaluating all training S1 entities", flush=True)
+        if progress is not None:
+            progress.start("Training retrieval benchmark and report")
         result = evaluate(connection, work_dir, output_dir, config)
         result["manifest"] = {
             "training_files_sha256": input_hashes,
@@ -341,6 +360,8 @@ def run(train_dir: Path, output_dir: Path, work_dir: Path,
         }
         write_report(result, output_dir)
         print("Phase 4 metrics and artifacts written", flush=True)
+        if progress is not None:
+            progress.finish()
     connection.close()
 
 
@@ -359,8 +380,11 @@ def main() -> None:
                         help="parallel exact/character retrieval workers; auto uses all available CPU cores (default)")
     args = parser.parse_args()
     config = RetrievalConfig(top_k=args.top_k, max_candidates=args.max_candidates)
+    total = 7 if args.stage == "all" else 1 if args.stage == "store" else 2
+    progress = WorkflowProgress(total)
     run(args.train_dir, args.output_dir, args.work_dir, config,
-        args.stage, args.shard_size, args.threads)
+        args.stage, args.shard_size, args.threads, progress=progress)
+    progress.check_complete()
 
 
 if __name__ == "__main__":

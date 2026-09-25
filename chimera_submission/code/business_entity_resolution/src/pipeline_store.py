@@ -42,6 +42,7 @@ def build_unlabeled_store(test_dir: str | Path, path: str | Path) -> dict[str, i
     counts = {"S1": 0, "S2": 0, "S3": 0}
     try:
         for source in (1, 2, 3):
+            print(f"test store: loading S{source}", flush=True)
             batch = []
             for record in iter_source(test_dir / f"test_source{source}.tsv", source):
                 view = normalize_record(record)
@@ -64,12 +65,18 @@ def build_unlabeled_store(test_dir: str | Path, path: str | Path) -> dict[str, i
                     )
                     connection.commit()
                     batch.clear()
+                    if counts[f"S{source}"] % 250_000 == 0:
+                        print(f"test store: S{source} {counts[f'S{source}']:,} rows loaded",
+                              flush=True)
             if batch:
                 connection.executemany(
                     "INSERT INTO source1 VALUES (?,?,?,?,?,?,?,?)" if source == 1
                     else "INSERT INTO targets VALUES (?,?,?,?,?,?,?,?,?)", batch,
                 )
                 connection.commit()
+            print(f"test store: S{source} complete ({counts[f'S{source}']:,} rows)",
+                  flush=True)
+        print("test store: building target indexes", flush=True)
         connection.execute("CREATE INDEX target_exact_name ON targets(name_clean, entity_id)")
         connection.execute("CREATE INDEX target_exact_core ON targets(name_core, entity_id)")
         connection.commit()

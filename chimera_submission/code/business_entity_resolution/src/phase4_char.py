@@ -35,6 +35,9 @@ def _vocabulary_and_idf(connection: sqlite3.Connection, view: str,
         term_frequency.update(ngrams)
         document_frequency.update(set(ngrams))
         target_count += 1
+        if target_count % 1_000_000 == 0:
+            print(f"{view}: scanned {target_count:,} targets for character vocabulary",
+                  flush=True)
     # TfidfVectorizer uses the most frequent features when max_features is set.
     # Lexical ordering resolves equal-frequency terms deterministically.
     selected = sorted(term_frequency, key=lambda term: (-term_frequency[term], term))[
@@ -46,19 +49,26 @@ def _vocabulary_and_idf(connection: sqlite3.Connection, view: str,
         np.log((1 + target_count) / (1 + document_frequency[term])) + 1
         for term in selected
     ], dtype=np.float32)
+    print(f"{view}: character vocabulary ready ({target_count:,} targets, "
+          f"{len(vocabulary):,} n-grams)", flush=True)
     return vocabulary, idf
 
 
 def _query_chunks(connection: sqlite3.Connection, view: str, vectorizer: CountVectorizer,
                   idf: np.ndarray, rows_per_chunk: int,
-                  cache_dir: Path) -> list[tuple[Path, int]]:
+                  cache_dir: Path, source_count: int) -> list[tuple[Path, int]]:
     cursor = connection.execute(f"SELECT {view} FROM source1 ORDER BY seq")
     chunks = []
+    cached = 0
     while rows := cursor.fetchmany(rows_per_chunk):
         matrix = vectorizer.transform([row[0] for row in rows]).tocsr()
         path = cache_dir / f"query_{len(chunks):04d}.npz"
         sparse.save_npz(path, _weighted(matrix, idf), compressed=False)
         chunks.append((path, len(rows)))
+        cached += len(rows)
+        if cached % 250_000 == 0 or cached == source_count:
+            print(f"{view}: cached {cached:,}/{source_count:,} S1 query vectors",
+                  flush=True)
     return chunks
 
 
@@ -172,7 +182,7 @@ def char_channel(connection: sqlite3.Connection, view: str, candidate_path: str 
     with tempfile.TemporaryDirectory(prefix=f"{view}_queries_",
                                      dir=candidate_path.parent) as cache_name:
         query_chunks = _query_chunks(connection, view, vectorizer, idf, 50_000,
-                                     Path(cache_name))
+                                     Path(cache_name), source_count)
         for target_start in range(0, target_count, shard_size):
             target_end = min(target_start + shard_size, target_count)
             texts = [row[0] for row in connection.execute(
@@ -197,7 +207,11 @@ def char_channel(connection: sqlite3.Connection, view: str, candidate_path: str 
                     _merge_batch(candidates, scores, output, query_start + offset,
                                  target_start, target_ids, config.top_k, shard_top_n,
                                  corrections)
+                previous = query_start
                 query_start += chunk_rows
+                if query_start // 500_000 > previous // 500_000:
+                    print(f"{view}: target shard through {target_end:,}/{target_count:,}; "
+                          f"S1 queries {query_start:,}/{source_count:,}", flush=True)
                 del chunk
             candidates.flush()
             scores.flush()

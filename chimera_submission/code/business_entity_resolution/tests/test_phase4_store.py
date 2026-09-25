@@ -2,9 +2,11 @@
 
 import csv
 import gzip
+import io
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
 import numpy as np
@@ -21,6 +23,7 @@ from src.phase4_store import (
     rare_token_channel,
 )
 from src.retrieval import RetrievalConfig, generate_candidates
+from src.workflow_progress import WorkflowProgress
 
 
 HEADER = "entity_id\tbusiness_name\tbusiness_address\tcountry\n"
@@ -224,7 +227,14 @@ class Phase4StoreTests(unittest.TestCase):
         output_dir = self.root / "reports"
         work_dir = self.root / "work"
         config = RetrievalConfig(top_k=2, max_candidates=10)
-        run(self.train, output_dir, work_dir, config, "all", shard_size=2, threads=2)
+        progress = WorkflowProgress(7)
+        output = io.StringIO()
+        with redirect_stdout(output):
+            run(self.train, output_dir, work_dir, config, "all", shard_size=2,
+                threads=2, progress=progress)
+        progress.check_complete()
+        self.assertIn("[7/7] DONE Training retrieval benchmark and report",
+                      output.getvalue())
         metrics = json.loads((output_dir / "metrics.json").read_text(encoding="utf-8"))
         self.assertEqual(metrics["groups"]["overall"]["ground_truth_links"], 3)
         self.assertEqual(metrics["groups"]["overall"]["recovered_links"], 3)

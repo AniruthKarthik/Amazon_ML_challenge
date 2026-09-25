@@ -22,6 +22,7 @@ from .pipeline_store import DiskCandidateStore, QueryCandidates, build_unlabeled
 from .pipeline_provenance import model_code_sha256
 from .retrieval import CHANNELS, RetrievalConfig
 from .threshold_policy import load_frozen_config
+from .workflow_progress import WorkflowProgress
 
 
 MATCHING_HEADER = ("source1_entity_id", "matched_entity_ids")
@@ -117,6 +118,7 @@ def prepare_test_retrieval(
     test_dir: str | Path, work_dir: str | Path,
     top_k: int, max_candidates: int,
     shard_size: int = 100_000, threads: int = 4,
+    progress: WorkflowProgress | None = None,
 ) -> dict[str, int]:
     """Validate unlabeled test TSVs and materialize the same five channels."""
     test_dir, work_dir = Path(test_dir), Path(work_dir)
@@ -124,10 +126,13 @@ def prepare_test_retrieval(
     if min(shard_size, threads) < 1:
         raise ValueError("shard size and thread count must be positive")
     work_dir.mkdir(parents=True, exist_ok=True)
+    if progress is not None:
+        progress.start("Test store and input validation")
     hashes = _hash_inputs(test_dir)
     manifest = work_dir / "test_inputs.json"
     store_path = work_dir / "store.sqlite"
-    if store_path.exists():
+    reused_store = store_path.exists()
+    if reused_store:
         if not manifest.exists() or json.loads(manifest.read_text()) != hashes:
             raise ValueError("test TSVs changed or reusable store lacks input manifest")
     else:
@@ -150,8 +155,15 @@ def prepare_test_retrieval(
             "SELECT name FROM sqlite_master WHERE name='truth_indexed'"
         ).fetchone():
             raise ValueError("test store must not contain ground truth")
+        if progress is not None:
+            progress.finish(reused=reused_store)
         for channel in CHANNELS:
-            run_channel(connection, channel, work_dir, config, shard_size, threads)
+            if progress is not None:
+                progress.start(f"Test retrieval: {channel}")
+            reused = run_channel(connection, channel, work_dir,
+                                 config, shard_size, threads)
+            if progress is not None:
+                progress.finish(reused=reused)
         # Verify completed arrays, including score channels, before accepting.
         DiskCandidateStore(connection, work_dir, top_k, max_candidates)
         return counts
@@ -206,6 +218,7 @@ def predict_test(
     output_dir: str | Path, batch_entities: int = 128,
     allow_exploratory: bool = False,
     dense_test_work_dir: str | Path | None = None,
+    progress: WorkflowProgress | None = None,
 ) -> dict[str, int]:
     """Apply the frozen raw-score model and policy; write complete TSVs atomically."""
     if batch_entities < 1:
@@ -265,17 +278,42 @@ def predict_test(
             matching_writer.writerow(MATCHING_HEADER)
             candidate_writer.writerow(CANDIDATE_HEADER)
             batch = []
+            processed = 0
+            last_reported = -1
+            next_report = 100_000
             for query in store.iter_queries():
                 batch.append(query)
                 if len(batch) == batch_entities:
                     _write_batch(batch, extractor, model, decision,
                                  matching_writer, candidate_writer,
                                  num_threads, meta_policy)
+                    processed += len(batch)
+                    if processed >= next_report:
+                        message = (f"Test scoring: {processed:,}/{store.source_count:,} "
+                                   "S1 entities written")
+                        if progress is None:
+                            print(message, flush=True)
+                        else:
+                            progress.detail(message)
+                        last_reported = processed
+                        next_report = (processed // 100_000 + 1) * 100_000
                     batch.clear()
             if batch:
                 _write_batch(batch, extractor, model, decision,
                              matching_writer, candidate_writer,
                              num_threads, meta_policy)
+                processed += len(batch)
+            if processed != store.source_count:
+                raise AssertionError("test scoring did not process every S1 entity")
+            if processed != last_reported:
+                message = (f"Test scoring: {processed:,}/{store.source_count:,} "
+                           "S1 entities written")
+                if progress is None:
+                    print(message, flush=True)
+                else:
+                    progress.detail(message)
+        if progress is not None:
+            progress.detail("Validating submission rows and recording output hashes")
         validate_outputs(connection, matching_tmp, candidate_tmp)
         manifest = {
             "schema_version": OUTPUT_MANIFEST_VERSION,

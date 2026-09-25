@@ -39,6 +39,7 @@ from .threshold_search import (
     OOFEntity, ThresholdGrid, leave_one_country_out, save_search_report,
     search_thresholds, threshold_sensitivity,
 )
+from .workflow_progress import WorkflowProgress
 
 
 @dataclass(frozen=True)
@@ -249,6 +250,7 @@ def train_cpu_baseline(
     store: DiskCandidateStore, output_dir: str | Path,
     config: CPUTrainingConfig,
     training_files_sha256: dict[str, str] | None = None,
+    progress: WorkflowProgress | None = None,
 ) -> dict[str, object]:
     """Cross-fit raw pair scores, tune policy, then fit a separate final model."""
     if store.connection.execute(
@@ -266,17 +268,25 @@ def train_cpu_baseline(
     oof_entities = []
     fold_diagnostics = {}
     for fold in range(config.folds):
+        if progress is not None:
+            progress.start(f"OOF LightGBM fold {fold + 1}/{config.folds}")
         train_seqs = tuple(seq for seq in sequences if fold_by_seq[seq] != fold)
         valid_seqs = tuple(seq for seq in sequences if fold_by_seq[seq] == fold)
+        if progress is not None:
+            progress.detail("Fitting fold-specific pair feature encoders")
         extractor = PairFeatureExtractor.fit_from_records(
             _record_factory(store, train_seqs), channels=store.channels,
             max_features=config.feature_max_features,
         )
         feature_names = extractor.feature_names
+        if progress is not None:
+            progress.detail("Building fold train/validation pair matrices")
         train_x, train_y, train_groups = _matrix(
             store, train_seqs, extractor, config.max_train_pairs)
         valid_x, valid_y, valid_groups = _matrix(
             store, valid_seqs, extractor, config.max_train_pairs)
+        if progress is not None:
+            progress.detail("Training LightGBM and scoring held-out entities")
         result = train_pair_baseline(
             train_x, train_y, valid_x, valid_y, feature_names,
             train_groups, valid_groups, config.model,
@@ -286,10 +296,19 @@ def train_cpu_baseline(
             store, valid_seqs, extractor, result.model, fold_by_seq,
             config.model.num_threads))
         print(f"completed OOF fold {fold + 1}/{config.folds}", flush=True)
+        if progress is not None:
+            progress.finish()
+    if progress is not None:
+        progress.start("OOF audit and entity threshold search")
+        progress.detail("Writing sampled S1 and raw OOF pair-score audits")
     audit = _write_audit_artifacts(
         building, store, sequences, fold_by_seq, oof_entities)
+    if progress is not None:
+        progress.detail("Searching A/B/C thresholds on OOF entity scores")
     grid = oof_threshold_grid(oof_entities, config.grid_points)
     search = search_thresholds(oof_entities, grid, "raw")
+    if progress is not None:
+        progress.detail("Evaluating threshold sensitivity and country holdouts")
     sensitivity = threshold_sensitivity(
         oof_entities, search.frozen_config, config.sensitivity_delta)
     country_shift = leave_one_country_out(
@@ -299,8 +318,12 @@ def train_cpu_baseline(
                        sensitivity, country_shift)
     save_frozen_config(building / "decision_config.json",
                        search.frozen_config)
+    if progress is not None:
+        progress.finish()
     selected_entity_decision = "deterministic"
     if config.evaluate_meta:
+        if progress is not None:
+            progress.start("Optional ZERO/ONE/MANY meta-model comparison")
         meta_result = generate_meta_oof_decisions(
             oof_entities, grid.pair, MetaModelConfig(num_threads=config.model.num_threads))
         comparison = compare_meta_to_phase10(
@@ -312,6 +335,11 @@ def train_cpu_baseline(
         if comparison.keep_meta:
             save_meta_artifact(building / "meta_model.joblib", meta_result)
             selected_entity_decision = "meta"
+        if progress is not None:
+            progress.finish()
+    if progress is not None:
+        progress.start("Final sampled LightGBM model and training report")
+        progress.detail("Fitting final pair feature encoders and matrix")
     final_extractor = PairFeatureExtractor.fit_from_records(
         _record_factory(store, sequences), channels=store.channels,
         max_features=config.feature_max_features,
@@ -322,6 +350,8 @@ def train_cpu_baseline(
         raise ValueError("final training matrix needs both positive and negative pairs")
     dataset = lgb.Dataset(final_x, label=final_y,
                           feature_name=list(final_extractor.feature_names))
+    if progress is not None:
+        progress.detail("Training final LightGBM pair scorer")
     model = lgb.train({
         "objective": "binary", "metric": "binary_logloss",
         "learning_rate": config.model.learning_rate,
@@ -335,6 +365,8 @@ def train_cpu_baseline(
     final_extractor.name_tfidf.cache.clear()
     final_extractor.address_tfidf.cache.clear()
     joblib.dump(final_extractor, building / "feature_extractor.joblib")
+    if progress is not None:
+        progress.detail("Writing OOF ranking diagnostics and model report")
     ordered = sorted(oof_entities, key=lambda item: item.source_id)
     ranking = evaluate_oof_ranking(
         [entity.source_id for entity in ordered for _ in entity.candidate_ids],
@@ -366,4 +398,6 @@ def train_cpu_baseline(
     (building / "training_report.json").write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(building, output_dir)
+    if progress is not None:
+        progress.finish()
     return report

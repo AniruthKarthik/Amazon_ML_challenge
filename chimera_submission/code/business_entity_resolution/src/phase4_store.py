@@ -56,6 +56,7 @@ def build_store(train_dir: str | Path, path: str | Path) -> dict[str, int]:
     )
     counts = {"S1": 0, "S2": 0, "S3": 0, "ground_truth_links": 0}
     for source in (1, 2, 3):
+        print(f"training store: loading S{source}", flush=True)
         batch = []
         for record in iter_source(train_dir / f"train_source{source}.tsv", source):
             view = normalize_record(record)
@@ -79,6 +80,9 @@ def build_store(train_dir: str | Path, path: str | Path) -> dict[str, int]:
                     raise DataContractError(f"duplicate entity ID in source {source}") from exc
                 connection.commit()
                 batch.clear()
+                if counts[f"S{source}"] % 250_000 == 0:
+                    print(f"training store: S{source} {counts[f'S{source}']:,} rows loaded",
+                          flush=True)
         if batch:
             try:
                 connection.executemany(
@@ -88,13 +92,18 @@ def build_store(train_dir: str | Path, path: str | Path) -> dict[str, int]:
             except sqlite3.IntegrityError as exc:
                 raise DataContractError(f"duplicate entity ID in source {source}") from exc
             connection.commit()
+        print(f"training store: S{source} complete ({counts[f'S{source}']:,} rows)",
+              flush=True)
     connection.execute("CREATE INDEX target_exact_name ON targets(name_clean, entity_id)")
     connection.execute("CREATE INDEX target_exact_core ON targets(name_core, entity_id)")
     connection.execute("CREATE TABLE truth_entities (entity_id TEXT PRIMARY KEY)")
     connection.execute("CREATE TABLE truth_links (source_id TEXT NOT NULL, target_id TEXT UNIQUE NOT NULL)")
     entity_batch, link_batch = [], []
     truth_path = train_dir / "train_ground_truth.tsv"
+    truth_rows = 0
+    print("training store: loading ground truth", flush=True)
     for line, row in _read_tsv(truth_path, TRUTH_COLUMNS):
+        truth_rows += 1
         source_id = row["source1_entity_id"]
         if not source_id.startswith("S1-"):
             raise DataContractError(f"{truth_path}:{line}: invalid S1 ID {source_id!r}")
@@ -114,6 +123,9 @@ def build_store(train_dir: str | Path, path: str | Path) -> dict[str, int]:
             connection.commit()
             entity_batch.clear()
             link_batch.clear()
+            if truth_rows % 250_000 == 0:
+                print(f"training store: ground truth {truth_rows:,} S1 rows loaded",
+                      flush=True)
     if entity_batch:
         try:
             connection.executemany("INSERT INTO truth_entities VALUES (?)", entity_batch)
@@ -121,6 +133,9 @@ def build_store(train_dir: str | Path, path: str | Path) -> dict[str, int]:
         except sqlite3.IntegrityError as exc:
             raise DataContractError("duplicate ground-truth entity or target") from exc
         connection.commit()
+    print(f"training store: ground truth complete ({truth_rows:,} S1 rows, "
+          f"{counts['ground_truth_links']:,} links)", flush=True)
+    print("training store: validating links and building indexes", flush=True)
     if connection.execute("SELECT COUNT(*) FROM truth_entities").fetchone()[0] != counts["S1"]:
         raise DataContractError("ground truth does not cover every S1 entity exactly once")
     if connection.execute(

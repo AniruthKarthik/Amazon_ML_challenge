@@ -40,6 +40,12 @@ LightGBM/threshold selection, unlabeled test retrieval, frozen inference, and
 internal SQLite-backed output validation. Completed stages are checked and
 reused on rerun. If you already have Phase 4 artifacts, add
 `--phase4-work /path/to/phase4-work --phase4-report /path/to/phase4-report`.
+The command prints numbered `START`, `DONE`, and `REUSED` stages (19 stages
+with the default three OOF folds; one more if the meta-model is enabled).
+The percentage counts completed stages, **not** estimated elapsed time.
+Large store builds print row counts, retrieval channels print their own query
+or shard progress, and test inference prints S1 rows written. An interrupted
+stage is never marked `DONE`; completed stages can be reused on the next run.
 Do not run it concurrently with an existing Phase 4 process. A partial report
 or partially written model/output directory is preserved for inspection and
 will stop the run rather than be overwritten. Output TSVs are
