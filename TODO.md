@@ -69,10 +69,10 @@
 ## Phase 6: Pair Features
 
 **Objective:** Generate tabular features for scoring candidate pairs.
-- [ ] Implement name/address edit distances (Levenshtein, Jaro-Winkler).
-- [ ] Implement token overlap, TF-IDF cosine, and numeric address overlap.
-- [ ] Implement interaction features (country flags, missingness context).
-- [ ] Append retrieval provenance (ranks, scores, channel counts).
+- [x] Implement name/address edit distances (Levenshtein, Jaro-Winkler).
+- [x] Implement token overlap, TF-IDF cosine, and numeric address overlap.
+- [x] Implement interaction features (country flags, missingness context).
+- [x] Append retrieval provenance (ranks, scores, channel counts).
 **Metrics:** Feature build time, NaN/Infinity assertions.
 **Acceptance Criteria:** Features are pure functions of candidate pairs without fold leakage.
 **Next Decision:** Proceed to Phase 7.
