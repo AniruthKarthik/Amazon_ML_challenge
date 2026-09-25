@@ -235,12 +235,13 @@ class CandidateRetriever:
                     print(f"\r  [Candidate Retrieval 2/4: Char TF-IDF] {row_idx + 1}/{n_rows} queries ({pct:.1f}%)", end="", flush=True)
 
                 s1_id = s1_ids[row_idx]
-                row_sim = sim_mat.getrow(row_idx)
-                if row_sim.nnz == 0:
+                s = sim_mat.indptr[row_idx]
+                e = sim_mat.indptr[row_idx + 1]
+                if s == e:
                     continue
 
-                col_indices = row_sim.indices
-                scores = row_sim.data
+                col_indices = sim_mat.indices[s:e]
+                scores = sim_mat.data[s:e]
 
                 # Filter by min threshold
                 valid_mask = scores >= self.min_tfidf_score
@@ -286,12 +287,13 @@ class CandidateRetriever:
                         print(f"\r  [Candidate Retrieval 3/4: Address TF-IDF] {local_idx + 1}/{n_addr} queries ({pct:.1f}%)", end="", flush=True)
 
                     s1_id = s1_df["entity_id"].iloc[orig_idx]
-                    row_sim = sim_addr_mat.getrow(local_idx)
-                    if row_sim.nnz == 0:
+                    s = sim_addr_mat.indptr[local_idx]
+                    e = sim_addr_mat.indptr[local_idx + 1]
+                    if s == e:
                         continue
 
-                    col_indices = row_sim.indices
-                    scores = row_sim.data
+                    col_indices = sim_addr_mat.indices[s:e]
+                    scores = sim_addr_mat.data[s:e]
                     valid_mask = scores >= 0.40  # higher threshold for address
                     valid_cols = col_indices[valid_mask]
                     valid_scores = scores[valid_mask]
@@ -331,12 +333,13 @@ class CandidateRetriever:
                     print(f"\r  [Candidate Retrieval 4/4: Word TF-IDF] {row_idx + 1}/{n_word} queries ({pct:.1f}%)", end="", flush=True)
 
                 s1_id = s1_ids[row_idx]
-                row_sim = sim_word_mat.getrow(row_idx)
-                if row_sim.nnz == 0:
+                s = sim_word_mat.indptr[row_idx]
+                e = sim_word_mat.indptr[row_idx + 1]
+                if s == e:
                     continue
 
-                col_indices = row_sim.indices
-                scores = row_sim.data
+                col_indices = sim_word_mat.indices[s:e]
+                scores = sim_word_mat.data[s:e]
                 valid_mask = scores >= self.min_word_tfidf_score
                 valid_cols = col_indices[valid_mask]
                 valid_scores = scores[valid_mask]

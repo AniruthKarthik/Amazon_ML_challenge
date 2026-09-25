@@ -12,6 +12,8 @@ Implements:
 
 from __future__ import annotations
 
+import os
+import multiprocessing as mp
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 import numpy as np
@@ -168,6 +170,21 @@ class EntityAggregator:
         return pd.DataFrame(rows)
 
 
+def _evaluate_combo_worker(
+    args: Tuple[Tuple[float, float, float], Dict[str, List[Tuple[str, float]]], Dict[str, Set[str]], Set[str]]
+) -> Tuple[EntityDecisionPolicy, float]:
+    """Worker function for multi-core threshold combination evaluation."""
+    (p_th, e_th, g_th), cands_by_s1, ground_truth, all_s1_ids = args
+    pol = EntityDecisionPolicy(
+        pair_threshold=p_th,
+        entity_threshold=e_th,
+        gap_threshold=g_th,
+    )
+    preds = EntityAggregator.apply_policy(cands_by_s1, pol, all_s1_ids)
+    score = MetricsEvaluator.compute_macro_f05(preds, ground_truth, all_s1_ids)
+    return pol, score
+
+
 class ThresholdOptimizer:
     """Jointly optimizes and stress-tests decision threshold policies."""
 
@@ -183,6 +200,7 @@ class ThresholdOptimizer:
         entity_threshold_grid: Optional[List[float]] = None,
         gap_threshold_grid: Optional[List[float]] = None,
         verbose: bool = True,
+        n_jobs: int = -1,
     ) -> ThresholdOptimizationReport:
         """Jointly optimize pair, entity, and gap thresholds on OOF predictions."""
         # 1. Compare Raw vs Calibrated performance
@@ -205,6 +223,8 @@ class ThresholdOptimizer:
             (p, e, g) for p in p_grid for e in e_grid if e >= p for g in g_grid
         ]
         total_combos = len(valid_combos)
+        n_workers = os.cpu_count() or 4 if n_jobs == -1 else n_jobs
+        n_workers = max(1, min(n_workers, 16))
 
         for sc_idx, sc in enumerate(score_cols_to_check, start=1):
             _, cands_by_s1 = EntityAggregator.aggregate_entity_candidates(
@@ -214,28 +234,47 @@ class ThresholdOptimizer:
             best_sc_f05 = -1.0
             best_sc_policy = None
 
-            for idx, (p_th, e_th, g_th) in enumerate(valid_combos, start=1):
-                if verbose and (idx % 15 == 0 or idx == total_combos or idx <= 5):
-                    pct = 100.0 * idx / total_combos
-                    print(
-                        f"\r  [Threshold Search {sc_idx}/{len(score_cols_to_check)}: {sc}] Combo {idx}/{total_combos} ({pct:.1f}%) | Best F0.5: {best_sc_f05:.4f}",
-                        end="",
-                        flush=True,
+            if n_workers > 1 and total_combos >= 30:
+                if verbose:
+                    print(f"  [Threshold Search {sc_idx}/{len(score_cols_to_check)}: {sc}] Evaluating {total_combos} combinations across {n_workers} CPU cores...")
+                combo_args = [
+                    (combo, cands_by_s1, ground_truth, all_s1_ids)
+                    for combo in valid_combos
+                ]
+                ctx = mp.get_context("forkserver" if "forkserver" in mp.get_all_start_methods() else "fork")
+                with ctx.Pool(processes=n_workers) as pool:
+                    combo_results = pool.map(_evaluate_combo_worker, combo_args)
+
+                for pol, score in combo_results:
+                    if score > best_sc_f05:
+                        best_sc_f05 = score
+                        best_sc_policy = pol
+
+                if verbose:
+                    print(f"\r  [Threshold Search {sc_idx}/{len(score_cols_to_check)}: {sc}] Completed {total_combos}/{total_combos} combos | Best F0.5: {best_sc_f05:.4f}")
+            else:
+                for idx, (p_th, e_th, g_th) in enumerate(valid_combos, start=1):
+                    if verbose and (idx % 15 == 0 or idx == total_combos or idx <= 5):
+                        pct = 100.0 * idx / total_combos
+                        print(
+                            f"\r  [Threshold Search {sc_idx}/{len(score_cols_to_check)}: {sc}] Combo {idx}/{total_combos} ({pct:.1f}%) | Best F0.5: {best_sc_f05:.4f}",
+                            end="",
+                            flush=True,
+                        )
+                    pol = EntityDecisionPolicy(
+                        pair_threshold=p_th,
+                        entity_threshold=e_th,
+                        gap_threshold=g_th,
                     )
-                pol = EntityDecisionPolicy(
-                    pair_threshold=p_th,
-                    entity_threshold=e_th,
-                    gap_threshold=g_th,
-                )
-                preds = EntityAggregator.apply_policy(cands_by_s1, pol, all_s1_ids)
-                score = MetricsEvaluator.compute_macro_f05(preds, ground_truth, all_s1_ids)
+                    preds = EntityAggregator.apply_policy(cands_by_s1, pol, all_s1_ids)
+                    score = MetricsEvaluator.compute_macro_f05(preds, ground_truth, all_s1_ids)
 
-                if score > best_sc_f05:
-                    best_sc_f05 = score
-                    best_sc_policy = pol
+                    if score > best_sc_f05:
+                        best_sc_f05 = score
+                        best_sc_policy = pol
 
-            if verbose:
-                print(f"\r  [Threshold Search {sc_idx}/{len(score_cols_to_check)}: {sc}] Completed {total_combos}/{total_combos} combos | Best F0.5: {best_sc_f05:.4f}    ")
+                if verbose:
+                    print(f"\r  [Threshold Search {sc_idx}/{len(score_cols_to_check)}: {sc}] Completed {total_combos}/{total_combos} combos | Best F0.5: {best_sc_f05:.4f}    ")
 
             raw_vs_cal[sc] = best_sc_f05
             if best_sc_f05 > best_overall_score:

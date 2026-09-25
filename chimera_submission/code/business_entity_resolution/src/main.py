@@ -58,6 +58,12 @@ def parse_args() -> argparse.Namespace:
         default=42,
         help="Random seed for reproducibility (default: 42)",
     )
+    parser.add_argument(
+        "--n-jobs",
+        type=int,
+        default=-1,
+        help="Number of CPU cores to utilize (-1 for all cores, default: -1)",
+    )
     return parser.parse_args()
 
 
@@ -70,6 +76,7 @@ def main() -> int:
     print(f"  Output Directory: {args.output_dir}")
     print(f"  Folds:            {args.k_folds}")
     print(f"  Seed:             {args.seed}")
+    print(f"  CPU Parallelism:  {'all available cores' if args.n_jobs == -1 else f'{args.n_jobs} cores'}")
     print("=" * 70)
 
     train_path = Path(args.train_dir)
@@ -122,7 +129,7 @@ def main() -> int:
 
     # 2. Fit Pipeline & Cross-Validate
     print("\n[Step 2/5] Fitting pipeline, cross-fitting models & optimizing robust thresholds...")
-    config = PipelineConfig(k_folds=args.k_folds, random_seed=args.seed)
+    config = PipelineConfig(k_folds=args.k_folds, random_seed=args.seed, n_jobs=args.n_jobs)
     pipeline = BusinessEntityResolutionPipeline(config=config)
     pipeline.fit(train_s1, train_s2, train_s3, gt_df)
 

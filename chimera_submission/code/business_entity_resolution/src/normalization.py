@@ -6,6 +6,8 @@ preserving discriminative signals and Unicode integrity while ensuring idempoten
 
 from __future__ import annotations
 
+import os
+import multiprocessing as mp
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -174,8 +176,7 @@ class TextNormalizer:
         return " ".join(result.split())
 
     @classmethod
-    def normalize_dataframe(cls, df: pd.DataFrame) -> pd.DataFrame:
-        """Add all normalized views to a DataFrame, preserving raw fields."""
+    def _normalize_single(cls, df: pd.DataFrame) -> pd.DataFrame:
         out_df = df.copy()
         out_df["name_clean"] = out_df["business_name"].apply(cls.clean_name)
         out_df["name_folded"] = out_df["business_name"].apply(cls.fold_accents)
@@ -183,3 +184,26 @@ class TextNormalizer:
         out_df["address_clean"] = out_df["business_address"].apply(cls.clean_address)
         out_df["address_alias"] = out_df["business_address"].apply(cls.alias_address)
         return out_df
+
+    @classmethod
+    def normalize_dataframe(cls, df: pd.DataFrame, n_jobs: int = -1) -> pd.DataFrame:
+        """Add all normalized views to a DataFrame with multi-core parallelism."""
+        if len(df) < 2000 or n_jobs == 1:
+            return cls._normalize_single(df)
+
+        n_workers = os.cpu_count() or 4 if n_jobs == -1 else n_jobs
+        n_workers = max(1, min(n_workers, 16))
+
+        chunk_size = (len(df) + n_workers - 1) // n_workers
+        chunks = [df.iloc[i : i + chunk_size] for i in range(0, len(df), chunk_size)]
+
+        ctx = mp.get_context("forkserver" if "forkserver" in mp.get_all_start_methods() else "fork")
+        with ctx.Pool(processes=n_workers) as pool:
+            norm_chunks = pool.map(_normalize_chunk_worker, chunks)
+
+        return pd.concat(norm_chunks, ignore_index=True)
+
+
+def _normalize_chunk_worker(chunk: pd.DataFrame) -> pd.DataFrame:
+    """Worker function for multi-core dataframe normalization."""
+    return TextNormalizer._normalize_single(chunk)

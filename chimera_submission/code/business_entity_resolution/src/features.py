@@ -12,8 +12,10 @@ Computes:
 
 from __future__ import annotations
 
+import os
+import multiprocessing as mp
 import re
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 import numpy as np
 import pandas as pd
 
@@ -138,29 +140,26 @@ def extract_numbers(text: str) -> Set[str]:
     return set(_NUMERIC_PATTERN.findall(text))
 
 
+def _extract_chunk_worker(
+    args: Tuple[pd.DataFrame, Dict[str, Dict[str, str]], Dict[str, Dict[str, str]]]
+) -> List[Dict[str, Any]]:
+    """Worker function for multi-core feature extraction."""
+    chunk_df, s1_records, cand_records = args
+    return PairFeatureExtractor._extract_features_list(
+        chunk_df, s1_records, cand_records, verbose=False
+    )
+
+
 class PairFeatureExtractor:
     """Extracts leakage-free tabular feature vectors for candidate pairs."""
 
     @staticmethod
-    def build_features(
+    def _extract_features_list(
         pairs_df: pd.DataFrame,
         s1_records: Dict[str, Dict[str, str]],
         cand_records: Dict[str, Dict[str, str]],
-        verbose: bool = True,
-    ) -> pd.DataFrame:
-        """Build pair features for each row in pairs_df.
-
-        Parameters
-        ----------
-        pairs_df : pd.DataFrame with source1_entity_id, candidate_entity_id, and provenance columns.
-        s1_records : Dict[entity_id, normalized_field_dict].
-        cand_records : Dict[entity_id, normalized_field_dict].
-        verbose : bool indicating whether to print progress.
-
-        Returns
-        -------
-        pd.DataFrame containing feature columns plus identifiers.
-        """
+        verbose: bool = False,
+    ) -> List[Dict[str, Any]]:
         features_list = []
         total_pairs = len(pairs_df)
         log_interval = max(100, total_pairs // 50) if total_pairs > 0 else 1
@@ -329,6 +328,59 @@ class PairFeatureExtractor:
 
         if verbose and total_pairs > 0:
             print(f"\r  [Feature Extraction] Completed {total_pairs}/{total_pairs} pairs (100.0%)               ")
+
+        return features_list
+
+    @classmethod
+    def build_features(
+        cls,
+        pairs_df: pd.DataFrame,
+        s1_records: Dict[str, Dict[str, str]],
+        cand_records: Dict[str, Dict[str, str]],
+        verbose: bool = True,
+        n_jobs: int = -1,
+    ) -> pd.DataFrame:
+        """Build pair features for each row in pairs_df with multi-core support.
+
+        Parameters
+        ----------
+        pairs_df : pd.DataFrame with candidate pairs.
+        s1_records : Dict[entity_id, normalized_field_dict].
+        cand_records : Dict[entity_id, normalized_field_dict].
+        verbose : bool indicating whether to print progress.
+        n_jobs : number of parallel worker processes (-1 for all available cores).
+
+        Returns
+        -------
+        pd.DataFrame containing feature columns plus identifiers.
+        """
+        total_pairs = len(pairs_df)
+        if total_pairs == 0:
+            return pd.DataFrame()
+
+        n_workers = os.cpu_count() or 4 if n_jobs == -1 else n_jobs
+        n_workers = max(1, min(n_workers, 16))
+
+        if total_pairs < 500 or n_workers <= 1:
+            features_list = cls._extract_features_list(
+                pairs_df, s1_records, cand_records, verbose=verbose
+            )
+        else:
+            chunk_size = (total_pairs + n_workers - 1) // n_workers
+            chunks = [
+                (pairs_df.iloc[i : i + chunk_size], s1_records, cand_records)
+                for i in range(0, total_pairs, chunk_size)
+            ]
+            if verbose:
+                print(f"  [Feature Extraction (Multi-Core: {n_workers} CPU cores)] Extracting features for {total_pairs} pairs across {len(chunks)} parallel chunks...")
+
+            ctx = mp.get_context("forkserver" if "forkserver" in mp.get_all_start_methods() else "fork")
+            with ctx.Pool(processes=n_workers) as pool:
+                results_nested = pool.map(_extract_chunk_worker, chunks)
+
+            features_list = [item for sublist in results_nested for item in sublist]
+            if verbose:
+                print(f"\r  [Feature Extraction (Multi-Core)] Completed {total_pairs}/{total_pairs} pairs (100.0%) across {n_workers} CPU cores.    ")
 
         df = pd.DataFrame(features_list)
         # Strict NaN and Infinity assertions

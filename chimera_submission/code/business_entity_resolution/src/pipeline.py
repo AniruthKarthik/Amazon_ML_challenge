@@ -62,6 +62,7 @@ class PipelineConfig:
     pair_threshold: float = 0.50
     entity_threshold: float = 0.55
     gap_threshold: float = 0.15
+    n_jobs: int = -1
 
 
 class BusinessEntityResolutionPipeline:
@@ -86,9 +87,9 @@ class BusinessEntityResolutionPipeline:
         """Fit all pipeline stages on training data using leak-free cross-fitting."""
         # 1. Multi-view Normalization
         print("\n  [Stage 1/6] Multi-View Normalization...")
-        s1_norm = TextNormalizer.normalize_dataframe(train_s1_df)
-        s2_norm = TextNormalizer.normalize_dataframe(train_s2_df)
-        s3_norm = TextNormalizer.normalize_dataframe(train_s3_df)
+        s1_norm = TextNormalizer.normalize_dataframe(train_s1_df, n_jobs=self.config.n_jobs)
+        s2_norm = TextNormalizer.normalize_dataframe(train_s2_df, n_jobs=self.config.n_jobs)
+        s3_norm = TextNormalizer.normalize_dataframe(train_s3_df, n_jobs=self.config.n_jobs)
         target_norm = pd.concat([s2_norm, s3_norm], ignore_index=True)
 
         all_s1_ids = set(s1_norm["entity_id"])
@@ -133,7 +134,10 @@ class BusinessEntityResolutionPipeline:
         target_records = target_norm.set_index("entity_id").to_dict(orient="index")
 
         feats_df = PairFeatureExtractor.build_features(
-            pairs_df, s1_records=s1_records, cand_records=target_records
+            pairs_df,
+            s1_records=s1_records,
+            cand_records=target_records,
+            n_jobs=self.config.n_jobs,
         )
         self.feature_cols = [c for c in feats_df.columns if c.startswith("feat_")]
 
@@ -149,7 +153,7 @@ class BusinessEntityResolutionPipeline:
                 "num_leaves": self.config.lgb_num_leaves,
                 "random_state": self.config.random_seed,
                 "verbose": -1,
-                "n_jobs": -1,
+                "n_jobs": self.config.n_jobs,
             }
         )
         oof_res = self.pair_scorer.train_oof(
@@ -164,6 +168,7 @@ class BusinessEntityResolutionPipeline:
             all_s1_ids=all_s1_ids,
             fold_map=fold_map,
             s1_country_map=s1_country_map,
+            n_jobs=self.config.n_jobs,
         )
         self.locked_policy = opt_report.best_policy
 
@@ -200,9 +205,9 @@ class BusinessEntityResolutionPipeline:
 
         # 1. Multi-view Normalization
         print("\n  [Inference Stage 1/4] Normalizing Test Entities...")
-        s1_norm = TextNormalizer.normalize_dataframe(test_s1_df)
-        s2_norm = TextNormalizer.normalize_dataframe(test_s2_df)
-        s3_norm = TextNormalizer.normalize_dataframe(test_s3_df)
+        s1_norm = TextNormalizer.normalize_dataframe(test_s1_df, n_jobs=self.config.n_jobs)
+        s2_norm = TextNormalizer.normalize_dataframe(test_s2_df, n_jobs=self.config.n_jobs)
+        s3_norm = TextNormalizer.normalize_dataframe(test_s3_df, n_jobs=self.config.n_jobs)
         target_norm = pd.concat([s2_norm, s3_norm], ignore_index=True)
 
         all_s1_ids = set(s1_norm["entity_id"])
@@ -243,7 +248,10 @@ class BusinessEntityResolutionPipeline:
         target_records = target_norm.set_index("entity_id").to_dict(orient="index")
 
         feats_df = PairFeatureExtractor.build_features(
-            pairs_df, s1_records=s1_records, cand_records=target_records
+            pairs_df,
+            s1_records=s1_records,
+            cand_records=target_records,
+            n_jobs=self.config.n_jobs,
         )
 
         # 4. Ensemble Pair Scoring
