@@ -1,4 +1,4 @@
-"""Bounded CPU training on explicit S1 samples; no test inputs or labels.
+"""Bounded CPU/GPU training on explicit S1 samples; no test inputs or labels.
 
 The sample is an exploratory OOF experiment, not a full-training estimate.
 Each S1 is a separate truth-graph component because training truth requires
@@ -30,7 +30,10 @@ from .entity_meta_model import (
     save_meta_artifact, save_meta_report,
 )
 from .pair_features import PairFeatureExtractor
-from .pair_model import BaselineConfig, train_pair_baseline
+from .pair_model import (
+    BaselineConfig, lightgbm_parameters, resolve_training_device,
+    train_pair_baseline,
+)
 from .oof_ranking import evaluate_oof_ranking
 from .pipeline_store import DiskCandidateStore, QueryCandidates
 from .pipeline_provenance import model_code_sha256
@@ -261,6 +264,17 @@ def train_cpu_baseline(
     building = output_dir.with_name(output_dir.name + ".building")
     if output_dir.exists() or building.exists():
         raise FileExistsError(output_dir)
+    runtime_model, training_backend = resolve_training_device(config.model)
+    backend_message = (
+        "LightGBM training backend: "
+        f"{training_backend['resolved_device']} "
+        f"(requested {training_backend['requested_device']}, "
+        f"max_bin={training_backend['max_bin']})"
+    )
+    if progress is None:
+        print(backend_message, flush=True)
+    else:
+        progress.detail(backend_message)
     sequences = select_source_sequences(store.source_count, config.train_entities,
                                         config.seed)
     fold_by_seq = _folds_for_sequences(sequences, config.folds)
@@ -289,12 +303,12 @@ def train_cpu_baseline(
             progress.detail("Training LightGBM and scoring held-out entities")
         result = train_pair_baseline(
             train_x, train_y, valid_x, valid_y, feature_names,
-            train_groups, valid_groups, config.model,
+            train_groups, valid_groups, runtime_model,
         )
         fold_diagnostics[fold] = result.pair_diagnostics
         oof_entities.extend(_score_queries(
             store, valid_seqs, extractor, result.model, fold_by_seq,
-            config.model.num_threads))
+            runtime_model.num_threads))
         print(f"completed OOF fold {fold + 1}/{config.folds}", flush=True)
         if progress is not None:
             progress.finish()
@@ -325,7 +339,7 @@ def train_cpu_baseline(
         if progress is not None:
             progress.start("Optional ZERO/ONE/MANY meta-model comparison")
         meta_result = generate_meta_oof_decisions(
-            oof_entities, grid.pair, MetaModelConfig(num_threads=config.model.num_threads))
+            oof_entities, grid.pair, MetaModelConfig(num_threads=runtime_model.num_threads))
         comparison = compare_meta_to_phase10(
             oof_entities, meta_result,
             search.policies[search.selected_policy].fold_configs,
@@ -352,15 +366,10 @@ def train_cpu_baseline(
                           feature_name=list(final_extractor.feature_names))
     if progress is not None:
         progress.detail("Training final LightGBM pair scorer")
-    model = lgb.train({
-        "objective": "binary", "metric": "binary_logloss",
-        "learning_rate": config.model.learning_rate,
-        "num_leaves": config.model.num_leaves,
-        "min_data_in_leaf": config.model.min_data_in_leaf,
-        "num_threads": config.model.num_threads,
-        "seed": config.model.seed, "deterministic": True,
-        "force_col_wise": True, "verbosity": -1,
-    }, dataset, num_boost_round=config.model.num_boost_round)
+    model = lgb.train(
+        lightgbm_parameters(runtime_model), dataset,
+        num_boost_round=runtime_model.num_boost_round,
+    )
     model.save_model(str(building / "pair_model.txt"))
     final_extractor.name_tfidf.cache.clear()
     final_extractor.address_tfidf.cache.clear()
@@ -387,6 +396,7 @@ def train_cpu_baseline(
         "selected_crossfit_metrics": asdict(
             search.policies[search.selected_policy].crossfit_metrics),
         "config": asdict(config),
+        "training_backend": training_backend,
         "training_files_sha256": training_files_sha256,
         "model_code_sha256": model_code_sha256(),
         "audit_artifacts": audit,

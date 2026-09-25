@@ -1,4 +1,4 @@
-"""Resumable, provisional 16 GB CPU workflow over the existing pipeline stages.
+"""Resumable, provisional CPU/GPU workflow over the existing pipeline stages.
 
 Completed artifacts are reused only after input/configuration checks. This
 orchestrator never reads test labels and never calls sampled OOF results final.
@@ -80,7 +80,7 @@ class CPUWorkflowConfig:
         if min(self.threads, self.batch_entities) < 1 or \
            (self.shard_size is not None and self.shard_size < 1) or \
            (self.test_shard_size is not None and self.test_shard_size < 1):
-            raise ValueError("CPU workflow resource limits must be positive")
+            raise ValueError("workflow resource limits must be positive")
         if not self.allow_exploratory:
             raise ValueError("provisional output requires explicit allow_exploratory=True")
         paths = (
@@ -193,7 +193,7 @@ def _workflow_lock(work_root: Path):
 def _run_locked(config: CPUWorkflowConfig) -> dict[str, object]:
     total_steps = 16 + config.training.folds + int(config.training.evaluate_meta)
     progress = WorkflowProgress(total_steps)
-    progress.detail("Starting provisional CPU pipeline; reused stages count as completed")
+    progress.detail("Starting provisional pipeline; reused stages count as completed")
     phase4_work = config.phase4_work or config.work_root / "phase4-work"
     phase4_report = config.phase4_report or config.work_root / "phase4-report"
     model_dir = config.work_root / "model"
@@ -269,6 +269,7 @@ def _run_locked(config: CPUWorkflowConfig) -> dict[str, object]:
         "phase4_reused": phase4_ready,
         "model_reused": model_reused,
         "output_reused": output_reused,
+        "training_backend": model_report["training_backend"],
         "selected_entity_decision": model_report["selected_entity_decision"],
         "training_source_entities": model_report["sampled_source_entities"],
         "test_source_counts": test_counts,

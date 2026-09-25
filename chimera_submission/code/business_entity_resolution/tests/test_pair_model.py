@@ -1,11 +1,14 @@
 """Tiny Phase 7 checks; these are not project-data model-training runs."""
 
 import unittest
+import warnings
+from unittest.mock import patch
 
 import numpy as np
 
 from src.pair_model import (
-    BaselineConfig, assign_component_folds, train_pair_baseline,
+    BaselineConfig, assign_component_folds, lightgbm_parameters,
+    resolve_training_device, train_pair_baseline,
 )
 
 
@@ -105,6 +108,48 @@ class PairModelTests(unittest.TestCase):
                     self.names, self.train_groups, self.valid_groups,
                     self.config, train_weights=weights,
                 )
+
+    def test_gpu_parameters_and_device_resolution_are_explicit(self):
+        requested = BaselineConfig(
+            device_type="gpu", max_bin=63, gpu_platform_id=1,
+            gpu_device_id=2, gpu_use_dp=False,
+        )
+        with patch("src.pair_model._gpu_probe", return_value=None):
+            resolved, report = resolve_training_device(requested)
+        self.assertEqual(resolved.device_type, "gpu")
+        self.assertEqual(report["resolved_device"], "gpu")
+        params = lightgbm_parameters(resolved)
+        self.assertEqual(params["device_type"], "gpu")
+        self.assertEqual(params["max_bin"], 63)
+        self.assertEqual(params["gpu_platform_id"], 1)
+        self.assertEqual(params["gpu_device_id"], 2)
+        self.assertNotIn("deterministic", params)
+        cpu_params = lightgbm_parameters(BaselineConfig())
+        self.assertEqual(cpu_params["device_type"], "cpu")
+        self.assertTrue(cpu_params["deterministic"])
+
+    def test_explicit_gpu_fails_closed_and_auto_warns_before_cpu_fallback(self):
+        with patch("src.pair_model._gpu_probe", return_value="no OpenCL device"):
+            with self.assertRaisesRegex(RuntimeError, "OpenCL probe failed"):
+                resolve_training_device(BaselineConfig(device_type="gpu"))
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                resolved, report = resolve_training_device(
+                    BaselineConfig(device_type="auto")
+                )
+        self.assertEqual(resolved.device_type, "cpu")
+        self.assertEqual(report["requested_device"], "auto")
+        self.assertIn("no OpenCL device", report["fallback_reason"])
+        self.assertEqual(len(caught), 1)
+
+    def test_invalid_gpu_resource_settings_are_rejected(self):
+        for values in (
+            {"device_type": "tpu"}, {"max_bin": 1},
+            {"gpu_platform_id": -2}, {"gpu_device_id": -2},
+            {"gpu_use_dp": 1},
+        ):
+            with self.subTest(values=values), self.assertRaises(ValueError):
+                BaselineConfig(**values)
 
 
 if __name__ == "__main__":

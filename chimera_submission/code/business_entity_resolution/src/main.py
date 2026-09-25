@@ -1,4 +1,4 @@
-"""Staged CPU pipeline CLI. Full project-data computation runs on the user's laptop."""
+"""Staged CPU/GPU pipeline CLI. Full project-data computation runs locally."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from src.cpu_training import CPUTrainingConfig, train_cpu_baseline
 from src.cpu_workflow import (
     CPUWorkflowConfig, open_training_candidate_store, run_cpu_workflow,
 )
-from src.pair_model import BaselineConfig
+from src.pair_model import BaselineConfig, resolve_training_device
 from src.phase4_store import open_store
 from src.workflow_progress import WorkflowProgress
 
@@ -34,6 +34,16 @@ def _add_training_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--country-min-entities", type=int, default=100)
     parser.add_argument("--boost-rounds", type=int, default=100)
     parser.add_argument("--min-data-in-leaf", type=int, default=20)
+    parser.add_argument("--device", choices=("auto", "cpu", "gpu"), default="cpu",
+                        help="LightGBM training device; explicit gpu fails if unavailable")
+    parser.add_argument("--max-bin", type=int, default=255,
+                        help="LightGBM histogram bins (63 is GPU-friendly)")
+    parser.add_argument("--gpu-platform-id", type=int, default=-1,
+                        help="OpenCL platform ID; -1 lets LightGBM choose")
+    parser.add_argument("--gpu-device-id", type=int, default=-1,
+                        help="OpenCL device ID; -1 lets LightGBM choose")
+    parser.add_argument("--gpu-use-dp", action="store_true",
+                        help="use slower double precision on GPU (normally unnecessary)")
     parser.add_argument("--threads", type=parse_thread_count,
                         default=available_cpu_count(),
                         help="parallel retrieval/model workers; auto uses all available CPU cores (default)")
@@ -47,7 +57,11 @@ def _training_config(args: argparse.Namespace) -> CPUTrainingConfig:
     model = BaselineConfig(num_boost_round=args.boost_rounds,
                            early_stopping_rounds=0,
                            min_data_in_leaf=args.min_data_in_leaf,
-                           num_threads=args.threads, seed=args.seed)
+                           num_threads=args.threads, seed=args.seed,
+                           device_type=args.device, max_bin=args.max_bin,
+                           gpu_platform_id=args.gpu_platform_id,
+                           gpu_device_id=args.gpu_device_id,
+                           gpu_use_dp=args.gpu_use_dp)
     return CPUTrainingConfig(
         train_entities=args.train_entities, max_train_pairs=args.max_train_pairs,
         folds=args.folds, grid_points=args.grid_points,
@@ -63,13 +77,13 @@ def _training_config(args: argparse.Namespace) -> CPUTrainingConfig:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    train = commands.add_parser("train", help="sampled, leakage-safe CPU OOF baseline")
+    train = commands.add_parser("train", help="sampled, leakage-safe CPU/GPU OOF baseline")
     train.add_argument("--phase4-work", type=Path, required=True)
     train.add_argument("--model-dir", type=Path, required=True)
     _add_training_options(train)
     train.add_argument("--dense-work", type=Path)
     train.add_argument("--dense-top-k", type=int, default=20)
-    workflow = commands.add_parser("run", help="resumable provisional lexical CPU workflow")
+    workflow = commands.add_parser("run", help="resumable provisional lexical CPU/GPU workflow")
     workflow.add_argument("--train-dir", type=Path, required=True)
     workflow.add_argument("--test-dir", type=Path, required=True)
     workflow.add_argument("--work-root", type=Path, required=True)
@@ -129,10 +143,15 @@ def main(argv: list[str] | None = None) -> None:
             connection.close()
         progress.check_complete()
     elif args.command == "run":
+        training = _training_config(args)
+        if args.device == "gpu" and not (args.work_root / "model").exists():
+            # Fail before full-data retrieval instead of discovering a driver or
+            # OpenCL problem after hours of CPU/disk preprocessing.
+            resolve_training_device(training.model)
         result = run_cpu_workflow(CPUWorkflowConfig(
             train_dir=args.train_dir, test_dir=args.test_dir,
             work_root=args.work_root, output_dir=args.output_dir,
-            training=_training_config(args), top_k=args.top_k,
+            training=training, top_k=args.top_k,
             max_candidates=args.max_candidates,
             shard_size=args.shard_size,
             test_shard_size=args.test_shard_size, threads=args.threads,

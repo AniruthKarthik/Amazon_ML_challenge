@@ -5,7 +5,9 @@ Pair-level diagnostics are not ranking-failure or entity-level F₀.₅ estimate
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import warnings
+from dataclasses import dataclass, replace
+from functools import lru_cache
 from typing import Iterable
 
 import lightgbm as lgb
@@ -71,6 +73,11 @@ class BaselineConfig:
     # Phase F additions (defaults preserve legacy behavior exactly).
     scale_pos_weight: float = 1.0
     reg_lambda: float = 0.0
+    device_type: str = "cpu"
+    max_bin: int = 255
+    gpu_platform_id: int = -1
+    gpu_device_id: int = -1
+    gpu_use_dp: bool = False
 
     def __post_init__(self) -> None:
         if min(self.num_boost_round, self.num_leaves,
@@ -84,6 +91,115 @@ class BaselineConfig:
             raise ValueError("scale_pos_weight must be positive")
         if isinstance(self.reg_lambda, bool) or not self.reg_lambda >= 0:
             raise ValueError("reg_lambda must be nonnegative")
+        if self.device_type not in ("auto", "cpu", "gpu"):
+            raise ValueError("device_type must be auto, cpu, or gpu")
+        if isinstance(self.max_bin, bool) or self.max_bin < 2:
+            raise ValueError("max_bin must be at least two")
+        for identifier in (self.gpu_platform_id, self.gpu_device_id):
+            if isinstance(identifier, bool) or not isinstance(identifier, int) or identifier < -1:
+                raise ValueError("GPU platform/device IDs must be -1 (automatic) or nonnegative")
+        if not isinstance(self.gpu_use_dp, bool):
+            raise ValueError("gpu_use_dp must be boolean")
+
+
+def lightgbm_parameters(config: BaselineConfig) -> dict[str, object]:
+    """Build one consistent parameter set for OOF and final training."""
+    params: dict[str, object] = {
+        "objective": "binary", "metric": "binary_logloss",
+        "learning_rate": config.learning_rate,
+        "num_leaves": config.num_leaves,
+        "min_data_in_leaf": config.min_data_in_leaf,
+        "num_threads": config.num_threads,
+        "seed": config.seed,
+        "verbosity": -1,
+        "scale_pos_weight": config.scale_pos_weight,
+        "lambda_l2": config.reg_lambda,
+        "max_bin": config.max_bin,
+    }
+    if config.device_type == "gpu":
+        params.update({
+            "device_type": "gpu",
+            "gpu_use_dp": config.gpu_use_dp,
+            "gpu_seed": config.seed,
+        })
+        if config.gpu_platform_id >= 0:
+            params["gpu_platform_id"] = config.gpu_platform_id
+        if config.gpu_device_id >= 0:
+            params["gpu_device_id"] = config.gpu_device_id
+    else:
+        params.update({
+            "device_type": "cpu",
+            "deterministic": True,
+            "force_col_wise": True,
+        })
+    return params
+
+
+@lru_cache(maxsize=None)
+def _gpu_probe(platform_id: int, device_id: int,
+               use_double_precision: bool, max_bin: int) -> str | None:
+    """Return an error string when LightGBM cannot execute on the chosen GPU."""
+    features = np.asarray([
+        [0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0],
+        [0.1, 0.2], [0.2, 0.1], [0.8, 0.9], [0.9, 0.8],
+    ], dtype=np.float32)
+    labels = np.asarray([0, 0, 1, 1, 0, 0, 1, 1], dtype=np.int8)
+    params: dict[str, object] = {
+        "objective": "binary", "metric": "binary_logloss",
+        "device_type": "gpu", "gpu_use_dp": use_double_precision,
+        "max_bin": max_bin, "min_data_in_leaf": 1,
+        "num_leaves": 3, "verbosity": -1,
+    }
+    if platform_id >= 0:
+        params["gpu_platform_id"] = platform_id
+    if device_id >= 0:
+        params["gpu_device_id"] = device_id
+    try:
+        lgb.train(params, lgb.Dataset(features, label=labels), num_boost_round=1)
+    except Exception as exc:  # LightGBM uses several backend-specific exception types.
+        return f"{type(exc).__name__}: {exc}"
+    return None
+
+
+def resolve_training_device(
+    config: BaselineConfig,
+) -> tuple[BaselineConfig, dict[str, object]]:
+    """Resolve ``auto`` once and fail closed when explicit GPU use is unavailable."""
+    requested = config.device_type
+    if requested == "cpu":
+        return config, {
+            "requested_device": requested, "resolved_device": "cpu",
+            "max_bin": config.max_bin,
+        }
+    failure = _gpu_probe(
+        config.gpu_platform_id, config.gpu_device_id,
+        config.gpu_use_dp, config.max_bin,
+    )
+    if failure is None:
+        resolved = replace(config, device_type="gpu")
+        return resolved, {
+            "requested_device": requested, "resolved_device": "gpu",
+            "gpu_platform_id": config.gpu_platform_id,
+            "gpu_device_id": config.gpu_device_id,
+            "gpu_use_dp": config.gpu_use_dp,
+            "max_bin": config.max_bin,
+        }
+    if requested == "gpu":
+        raise RuntimeError(
+            "LightGBM GPU training was requested but its OpenCL probe failed. "
+            "Install the NVIDIA driver/OpenCL runtime and a GPU-enabled LightGBM "
+            f"build, or use --device cpu. Probe error: {failure}"
+        )
+    warnings.warn(
+        f"LightGBM GPU probe failed; auto mode is using CPU. {failure}",
+        RuntimeWarning,
+        stacklevel=2,
+    )
+    resolved = replace(config, device_type="cpu")
+    return resolved, {
+        "requested_device": requested, "resolved_device": "cpu",
+        "fallback_reason": failure, "max_bin": config.max_bin,
+    }
 
 
 def balanced_pos_weight(labels) -> float:
@@ -167,6 +283,7 @@ def train_pair_baseline(
                 or not np.isfinite(weights).all() or np.any(weights <= 0)):
             raise ValueError("training weights must be aligned, finite and positive")
 
+    runtime_config, _ = resolve_training_device(config)
     train_data = lgb.Dataset(
         train_x, label=train_y, weight=weights,
         feature_name=list(feature_names), free_raw_data=True,
@@ -182,19 +299,7 @@ def train_pair_baseline(
             config.early_stopping_rounds, verbose=False
         ))
     model = lgb.train(
-        {
-            "objective": "binary", "metric": "binary_logloss",
-            "learning_rate": config.learning_rate,
-            "num_leaves": config.num_leaves,
-            "min_data_in_leaf": config.min_data_in_leaf,
-            "num_threads": config.num_threads,
-            "seed": config.seed,
-            "deterministic": True,
-            "force_col_wise": True,
-            "verbosity": -1,
-            "scale_pos_weight": config.scale_pos_weight,
-            "lambda_l2": config.reg_lambda,
-        },
+        lightgbm_parameters(runtime_config),
         train_data,
         num_boost_round=config.num_boost_round,
         valid_sets=[valid_data],
@@ -203,7 +308,7 @@ def train_pair_baseline(
     )
     scores = np.asarray(
         model.predict(valid_x, num_iteration=model.best_iteration or None,
-                      num_threads=config.num_threads),
+                      num_threads=runtime_config.num_threads),
         dtype=np.float64,
     )
     if not np.isfinite(scores).all() or np.any((scores < 0) | (scores > 1)):

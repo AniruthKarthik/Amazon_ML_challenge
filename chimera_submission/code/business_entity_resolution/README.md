@@ -2,7 +2,41 @@
 
 Team: `chimera`
 
-## CPU pipeline interface
+## CPU/GPU pipeline interface
+
+For an NVIDIA RTX A1000 laptop with 32 GB system RAM, first verify that the
+NVIDIA driver and OpenCL runtime are visible, then launch the resource-bounded
+GPU profile:
+
+```bash
+nvidia-smi
+make gpu-check
+make gpu-run
+```
+
+`gpu-run` uses explicit LightGBM OpenCL GPU training, 63 histogram bins,
+10,000 sampled S1 entities (at most 2.5 million pair rows), a 50,000-term
+feature vocabulary, and 512-entity inference batches. These limits are sized
+to keep the in-memory matrices safe on a 32 GB machine and the histogram data
+practical for laptop GPU memory. GPU mode is fail-closed: if LightGBM cannot
+execute its probe on the selected device, the run stops with setup guidance
+instead of silently training on CPU. With more than one OpenCL platform or GPU,
+select it using `GPU_PLATFORM_ID=` and `GPU_DEVICE_ID=`. Leave
+`GPU_USE_DP` unset; single precision is faster and sufficient for histogram
+training.
+
+If `gpu-check` reports that no OpenCL device exists, update the NVIDIA laptop
+driver and install its OpenCL runtime. If it reports that the GPU tree learner
+was not enabled, install/build LightGBM with GPU support. Re-run `gpu-check`
+until it prints a report whose `resolved_device` is `gpu`; the same backend is
+saved in `training_report.json` and printed by the final workflow result.
+
+Only LightGBM fitting is GPU accelerated. Exact/character retrieval, SQLite
+store construction, feature extraction, validation, and LightGBM prediction
+remain CPU/RAM work, so `THREADS=auto` still matters. `make run` defaults to
+`DEVICE=auto`: it uses the GPU when its startup probe succeeds and otherwise
+warns and falls back to CPU. Use `DEVICE=gpu` (or `make gpu-run`) when GPU use
+must be guaranteed, and `DEVICE=cpu` for reproducible CPU-only runs.
 
 Run the complete **provisional lexical baseline** from this directory with:
 
@@ -11,7 +45,7 @@ make run
 ```
 
 `make run` uses `.venv/bin/python`, all logical CPU cores available to the
-process for parallel exact/character retrieval and LightGBM stages,
+process for parallel exact/character retrieval and CPU-side model work,
 and a 3000-S1 sampled training smoke run. Override settings with, for example,
 `make run TRAIN_ENTITIES=5000 THREADS=8`; `THREADS=auto` is the default.
 To reuse a completed earlier Phase 4 run, set both
@@ -32,6 +66,7 @@ The equivalent direct invocation is:
   --output-dir ../../../provisional-output \
   --train-entities 3000 \
   --threads auto \
+  --device auto \
   --allow-provisional
 ```
 
