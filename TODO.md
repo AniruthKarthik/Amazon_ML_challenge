@@ -123,20 +123,20 @@
 ## Phase 11: Hard-Negative Mining
 
 **Objective:** Improve pair model discrimination through cross-fitted negative mining.
-- [ ] Mine false positives using Fold A model to generate negatives for Fold B.
-- [ ] Retrain pair scorer on augmented dataset.
-- [ ] **MANDATORY RE-EVALUATION:** Re-run Phase 8 (OOF) → Phase 9 (Aggregation) → Phase 10 (Thresholds).
+- [x] Mine false positives using Fold A model to generate negatives for Fold B.
+- [x] Retrain pair scorer on augmented dataset.
+- [x] **MANDATORY RE-EVALUATION:** Re-run Phase 8 (OOF) → Phase 9 (Aggregation) → Phase 10 (Thresholds).
 **Decision Gate:** Keep if FINAL cross-fitted entity-level F₀.₅ improves.
 
 ## Phase 12: Entity-Level Decision / Meta Model
 
 **Objective:** Predict the final set decision (zero, one, many) using complete candidate distributions.
-- [ ] Train a meta-model on OOF entity meta-features (score gap, max score, candidate count, distribution stats).
-- [ ] Compare empirically:
+- [x] Train a meta-model on OOF entity meta-features (score gap, max score, candidate count, distribution stats).
+- [x] Compare empirically:
   A. Pair score + deterministic threshold
   B. Pair score + top-1 / score-gap logic
   C. Pair score + entity-level meta-model
-- [ ] **MANDATORY RE-EVALUATION:** Re-run Phase 10 (Thresholds) on meta-model output.
+- [x] **MANDATORY RE-EVALUATION:** Re-run Phase 10 (Thresholds) on meta-model output.
 **Decision Gate:** Keep meta-model ONLY if Option C improves cross-fitted entity F₀.₅ over deterministic logic.
 
 ## Phase 13: Dense Bi-Encoder Retrieval (Independent Conditional)
