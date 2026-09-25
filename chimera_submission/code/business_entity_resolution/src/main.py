@@ -59,6 +59,12 @@ def parse_args() -> argparse.Namespace:
         help="Random seed for reproducibility (default: 42)",
     )
     parser.add_argument(
+        "--max-train-queries",
+        type=int,
+        default=100000,
+        help="Maximum S1 training entities to use for model fitting and threshold optimization (default: 100000; set to 0 to use all)",
+    )
+    parser.add_argument(
         "--n-jobs",
         type=int,
         default=-1,
@@ -71,12 +77,13 @@ def main() -> int:
     args = parse_args()
     print("=" * 70)
     print("ML Challenge 2026: Business Entity Resolution Pipeline")
-    print(f"  Train Directory:  {args.train_dir}")
-    print(f"  Test Directory:   {args.test_dir}")
-    print(f"  Output Directory: {args.output_dir}")
-    print(f"  Folds:            {args.k_folds}")
-    print(f"  Seed:             {args.seed}")
-    print(f"  CPU Parallelism:  {'all available cores' if args.n_jobs == -1 else f'{args.n_jobs} cores'}")
+    print(f"  Train Directory:    {args.train_dir}")
+    print(f"  Test Directory:     {args.test_dir}")
+    print(f"  Output Directory:   {args.output_dir}")
+    print(f"  Folds:              {args.k_folds}")
+    print(f"  Seed:               {args.seed}")
+    print(f"  Max Train Queries:  {args.max_train_queries if args.max_train_queries > 0 else 'unlimited'}")
+    print(f"  CPU Parallelism:    {'all available cores' if args.n_jobs == -1 else f'{args.n_jobs} cores'}")
     print("=" * 70)
 
     train_path = Path(args.train_dir)
@@ -112,16 +119,8 @@ def main() -> int:
     print(f"  Resolved Train Path: {train_path}")
     print(f"  Resolved Test Path:  {test_path}")
 
-    s1_train_file = train_path / "train_source1.tsv"
-    s2_train_file = train_path / "train_source2.tsv"
-    s3_train_file = train_path / "train_source3.tsv"
-    gt_file = train_path / "train_ground_truth.tsv"
-
-    train_s1 = TSVLoader.load_source_tsv(s1_train_file, expected_prefix="S1")
-    train_s2 = TSVLoader.load_source_tsv(s2_train_file, expected_prefix="S2")
-    train_s3 = TSVLoader.load_source_tsv(s3_train_file, expected_prefix="S3")
-    gt_df = GroundTruthLoader.load_ground_truth(
-        gt_file, valid_s1_ids=set(train_s1["entity_id"])
+    train_s1, train_s2, train_s3, gt_df = TSVLoader.load_training_split(
+        train_path, max_queries=args.max_train_queries, seed=args.seed
     )
     print(
         f"  Loaded Train S1: {len(train_s1)}, S2: {len(train_s2)}, S3: {len(train_s3)}, Ground Truth: {len(gt_df)}"
@@ -132,6 +131,11 @@ def main() -> int:
     config = PipelineConfig(k_folds=args.k_folds, random_seed=args.seed, n_jobs=args.n_jobs)
     pipeline = BusinessEntityResolutionPipeline(config=config)
     pipeline.fit(train_s1, train_s2, train_s3, gt_df)
+
+    # Release training memory before test phase
+    del train_s1, train_s2, train_s3, gt_df
+    import gc
+    gc.collect()
 
     rep = pipeline.ablation_report
     print("\n  --- Cross-Validation Metrics & Locked Decision Policy ---")

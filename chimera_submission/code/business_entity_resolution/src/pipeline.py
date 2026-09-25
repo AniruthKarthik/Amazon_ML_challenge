@@ -91,6 +91,9 @@ class BusinessEntityResolutionPipeline:
         s2_norm = TextNormalizer.normalize_dataframe(train_s2_df, n_jobs=self.config.n_jobs)
         s3_norm = TextNormalizer.normalize_dataframe(train_s3_df, n_jobs=self.config.n_jobs)
         target_norm = pd.concat([s2_norm, s3_norm], ignore_index=True)
+        del s2_norm, s3_norm
+        import gc
+        gc.collect()
 
         all_s1_ids = set(s1_norm["entity_id"])
         s1_country_map = dict(zip(s1_norm["entity_id"], s1_norm["country"]))
@@ -104,9 +107,7 @@ class BusinessEntityResolutionPipeline:
 
         # Parse ground truth mapping
         ground_truth: Dict[str, Set[str]] = {}
-        for _, row in ground_truth_df.iterrows():
-            s1 = row["source1_entity_id"]
-            raw_targets = row["matched_entity_ids"]
+        for s1, raw_targets in zip(ground_truth_df["source1_entity_id"], ground_truth_df["matched_entity_ids"]):
             targets = set([t.strip() for t in raw_targets.split(",") if t.strip()])
             ground_truth[s1] = targets
 
@@ -209,6 +210,9 @@ class BusinessEntityResolutionPipeline:
         s2_norm = TextNormalizer.normalize_dataframe(test_s2_df, n_jobs=self.config.n_jobs)
         s3_norm = TextNormalizer.normalize_dataframe(test_s3_df, n_jobs=self.config.n_jobs)
         target_norm = pd.concat([s2_norm, s3_norm], ignore_index=True)
+        del s2_norm, s3_norm
+        import gc
+        gc.collect()
 
         all_s1_ids = set(s1_norm["entity_id"])
         s1_country_map = dict(zip(s1_norm["entity_id"], s1_norm["country"]))
@@ -228,49 +232,100 @@ class BusinessEntityResolutionPipeline:
             max_candidates_per_entity=self.config.max_candidates_per_entity,
         )
         test_retriever.fit(target_norm)
-        candidates_raw = test_retriever.retrieve(s1_norm, n_jobs=self.config.n_jobs)
 
-        # Official candidate_pairs.tsv dataframe
-        candidate_pairs_df = test_retriever.to_candidate_pairs_tsv(
-            candidates_raw, all_s1_ids=all_s1_ids
-        )
+        total_s1 = len(s1_norm)
+        batch_size = 50000
 
-        pairs_df = test_retriever.to_dataframe(candidates_raw)
+        if total_s1 <= batch_size:
+            candidates_raw = test_retriever.retrieve(s1_norm, n_jobs=self.config.n_jobs)
+            candidate_pairs_df = test_retriever.to_candidate_pairs_tsv(
+                candidates_raw, all_s1_ids=all_s1_ids
+            )
+            pairs_df = test_retriever.to_dataframe(candidates_raw)
 
-        if pairs_df.empty:
-            # No candidates retrieved anywhere: all singletons
-            matching_results_df = EntityAggregator.to_matching_results_tsv({}, all_s1_ids)
+            if pairs_df.empty:
+                matching_results_df = EntityAggregator.to_matching_results_tsv({}, all_s1_ids)
+                return matching_results_df, candidate_pairs_df
+
+            # 3. Feature Extraction
+            print("\n  [Inference Stage 3/4] Pair Feature Extraction on Test Candidates...")
+            s1_records = s1_norm.set_index("entity_id").to_dict(orient="index")
+            target_records = target_norm.set_index("entity_id").to_dict(orient="index")
+
+            feats_df = PairFeatureExtractor.build_features(
+                pairs_df,
+                s1_records=s1_records,
+                cand_records=target_records,
+                n_jobs=self.config.n_jobs,
+            )
+
+            # 4. Ensemble Pair Scoring
+            print("\n  [Inference Stage 4/4] Bagged Ensemble Pair Scoring & Applying Locked Policy...")
+            scores = self.pair_scorer.predict(feats_df, use_calibrated=False)
+            feats_df["raw_score"] = scores
+
+            # 5. Entity Aggregation & Locked Threshold Policy
+            _, cands_by_s1 = EntityAggregator.aggregate_entity_candidates(
+                feats_df, all_s1_ids, score_col="raw_score"
+            )
+            active_policy = self.locked_policy or EntityDecisionPolicy()
+            predictions = EntityAggregator.apply_policy(
+                cands_by_s1, active_policy, all_s1_ids, s1_country_map=s1_country_map
+            )
+
+            matching_results_df = EntityAggregator.to_matching_results_tsv(
+                predictions, all_s1_ids=all_s1_ids
+            )
             return matching_results_df, candidate_pairs_df
+        else:
+            # Batch-streamed inference to strictly preserve memory on large test sets
+            n_batches = (total_s1 + batch_size - 1) // batch_size
+            print(f"  [Inference Memory Management] Processing {total_s1} entities across {n_batches} batches of up to {batch_size}...")
 
-        # 3. Feature Extraction
-        print("\n  [Inference Stage 3/4] Pair Feature Extraction on Test Candidates...")
-        s1_records = s1_norm.set_index("entity_id").to_dict(orient="index")
-        target_records = target_norm.set_index("entity_id").to_dict(orient="index")
+            target_records = target_norm.set_index("entity_id").to_dict(orient="index")
+            all_candidate_tsv_parts: List[pd.DataFrame] = []
+            all_matching_tsv_parts: List[pd.DataFrame] = []
+            active_policy = self.locked_policy or EntityDecisionPolicy()
 
-        feats_df = PairFeatureExtractor.build_features(
-            pairs_df,
-            s1_records=s1_records,
-            cand_records=target_records,
-            n_jobs=self.config.n_jobs,
-        )
+            for b_idx in range(n_batches):
+                start = b_idx * batch_size
+                end = min(start + batch_size, total_s1)
+                batch_s1 = s1_norm.iloc[start:end]
+                batch_s1_ids = set(batch_s1["entity_id"])
+                print(f"    Batch {b_idx + 1}/{n_batches} (entities {start + 1} to {end})...")
 
-        # 4. Ensemble Pair Scoring
-        print("\n  [Inference Stage 4/4] Bagged Ensemble Pair Scoring & Applying Locked Policy...")
-        scores = self.pair_scorer.predict(feats_df, use_calibrated=False)
-        feats_df["raw_score"] = scores
+                b_cands_raw = test_retriever.retrieve(batch_s1, verbose=False, n_jobs=self.config.n_jobs)
+                b_cand_tsv = test_retriever.to_candidate_pairs_tsv(b_cands_raw, all_s1_ids=batch_s1_ids)
+                all_candidate_tsv_parts.append(b_cand_tsv)
 
-        # 5. Entity Aggregation & Locked Threshold Policy
-        _, cands_by_s1 = EntityAggregator.aggregate_entity_candidates(
-            feats_df, all_s1_ids, score_col="raw_score"
-        )
-        active_policy = self.locked_policy or EntityDecisionPolicy()
-        predictions = EntityAggregator.apply_policy(
-            cands_by_s1, active_policy, all_s1_ids, s1_country_map=s1_country_map
-        )
+                b_pairs_df = test_retriever.to_dataframe(b_cands_raw)
+                if b_pairs_df.empty:
+                    b_match_tsv = EntityAggregator.to_matching_results_tsv({}, batch_s1_ids)
+                    all_matching_tsv_parts.append(b_match_tsv)
+                    continue
 
-        # Official matching_results.tsv dataframe
-        matching_results_df = EntityAggregator.to_matching_results_tsv(
-            predictions, all_s1_ids=all_s1_ids
-        )
+                b_s1_records = batch_s1.set_index("entity_id").to_dict(orient="index")
+                b_feats_df = PairFeatureExtractor.build_features(
+                    b_pairs_df,
+                    s1_records=b_s1_records,
+                    cand_records=target_records,
+                    verbose=False,
+                    n_jobs=self.config.n_jobs,
+                )
+                b_scores = self.pair_scorer.predict(b_feats_df, use_calibrated=False)
+                b_feats_df["raw_score"] = b_scores
+                _, b_cands_by_s1 = EntityAggregator.aggregate_entity_candidates(
+                    b_feats_df, batch_s1_ids, score_col="raw_score"
+                )
+                b_preds = EntityAggregator.apply_policy(
+                    b_cands_by_s1, active_policy, batch_s1_ids, s1_country_map=s1_country_map
+                )
+                b_match_tsv = EntityAggregator.to_matching_results_tsv(b_preds, all_s1_ids=batch_s1_ids)
+                all_matching_tsv_parts.append(b_match_tsv)
 
-        return matching_results_df, candidate_pairs_df
+                del b_cands_raw, b_cand_tsv, b_pairs_df, b_s1_records, b_feats_df, b_scores, b_cands_by_s1, b_preds, b_match_tsv
+                gc.collect()
+
+            matching_results_df = pd.concat(all_matching_tsv_parts, ignore_index=True)
+            candidate_pairs_df = pd.concat(all_candidate_tsv_parts, ignore_index=True)
+            return matching_results_df, candidate_pairs_df

@@ -26,6 +26,7 @@ OUTPUT_DIR ?= chimera_submission/output
 FOLDS ?= 5
 SEED ?= 42
 JOBS ?= -1
+MAX_TRAIN_QUERIES ?= 100000
 
 .PHONY: help venv install test run generate validate package clean clean-all
 
@@ -56,6 +57,7 @@ help:
 	@echo "  FOLDS=$(FOLDS)"
 	@echo "  SEED=$(SEED)"
 	@echo "  JOBS=$(JOBS)"
+	@echo "  MAX_TRAIN_QUERIES=$(MAX_TRAIN_QUERIES)"
 
 # Create virtual environment and install requirements
 $(VENV_DIR)/bin/activate:
@@ -84,7 +86,8 @@ run: $(VENV_STAMP)
 		--output-dir $(OUTPUT_DIR) \
 		--k-folds $(FOLDS) \
 		--seed $(SEED) \
-		--n-jobs $(JOBS)
+		--n-jobs $(JOBS) \
+		--max-train-queries $(MAX_TRAIN_QUERIES)
 
 validate: $(VENV_STAMP)
 	$(VENV_PYTHON) utils/validate_submission.py \

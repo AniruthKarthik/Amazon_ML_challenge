@@ -192,7 +192,7 @@ class TextNormalizer:
             return cls._normalize_single(df)
 
         n_workers = os.cpu_count() or 4 if n_jobs == -1 else n_jobs
-        n_workers = max(1, min(n_workers, 32))
+        n_workers = max(1, min(n_workers, 8))
 
         chunk_size = (len(df) + n_workers - 1) // n_workers
         chunks = [df.iloc[i : i + chunk_size] for i in range(0, len(df), chunk_size)]

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import io
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple, Union
@@ -133,6 +134,159 @@ class TSVLoader:
 
         return df
 
+    @classmethod
+    def load_filtered_source_tsv(
+        cls,
+        filepath_or_buffer: Union[str, Path, io.StringIO],
+        expected_prefix: Optional[str] = None,
+        filter_ids: Optional[Set[str]] = None,
+        required_ids: Optional[Set[str]] = None,
+        max_background: Optional[int] = None,
+        seed: int = 42,
+    ) -> pd.DataFrame:
+        """Stream and filter source TSV to strictly preserve RAM bounds."""
+        if not isinstance(filepath_or_buffer, (str, Path)) or not os.path.isfile(str(filepath_or_buffer)):
+            df = cls.load_source_tsv(filepath_or_buffer, expected_prefix=expected_prefix)
+            if filter_ids is not None:
+                df = df[df["entity_id"].isin(filter_ids)].copy()
+            return df
+
+        rng = np.random.RandomState(seed)
+        path = str(filepath_or_buffer)
+        rows = []
+        with open(path, "r", encoding="utf-8") as f:
+            header_line = f.readline()
+            if not header_line:
+                raise DataIntegrityError(f"File {path} is empty.")
+            headers = [h.strip().lower() for h in header_line.split("\t")]
+            col_map = {name: idx for idx, name in enumerate(headers)}
+            for req in REQUIRED_SOURCE_COLUMNS:
+                if req not in col_map:
+                    raise DataIntegrityError(f"Missing required column '{req}' in {path}.")
+
+            id_idx = col_map["entity_id"]
+            name_idx = col_map["business_name"]
+            addr_idx = col_map["business_address"]
+            ctry_idx = col_map["country"]
+
+            bg_count = 0
+            for line in f:
+                if not line.strip():
+                    continue
+                parts = line.rstrip("\r\n").split("\t")
+                if len(parts) <= max(id_idx, name_idx, addr_idx, ctry_idx):
+                    continue
+                eid = parts[id_idx].strip()
+                if not eid:
+                    continue
+
+                if filter_ids is not None:
+                    if eid in filter_ids:
+                        rows.append({
+                            "entity_id": eid,
+                            "business_name": parts[name_idx].strip(),
+                            "business_address": parts[addr_idx].strip(),
+                            "country": parts[ctry_idx].strip(),
+                        })
+                elif required_ids is not None:
+                    if eid in required_ids:
+                        rows.append({
+                            "entity_id": eid,
+                            "business_name": parts[name_idx].strip(),
+                            "business_address": parts[addr_idx].strip(),
+                            "country": parts[ctry_idx].strip(),
+                        })
+                    elif max_background is not None and bg_count < max_background:
+                        if rng.rand() < 0.20:
+                            rows.append({
+                                "entity_id": eid,
+                                "business_name": parts[name_idx].strip(),
+                                "business_address": parts[addr_idx].strip(),
+                                "country": parts[ctry_idx].strip(),
+                            })
+                            bg_count += 1
+                else:
+                    rows.append({
+                        "entity_id": eid,
+                        "business_name": parts[name_idx].strip(),
+                        "business_address": parts[addr_idx].strip(),
+                        "country": parts[ctry_idx].strip(),
+                    })
+
+        return pd.DataFrame(rows, columns=REQUIRED_SOURCE_COLUMNS)
+
+    @classmethod
+    def load_training_split(
+        cls,
+        train_dir: Path,
+        max_queries: int = 100000,
+        seed: int = 42,
+    ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """Load balanced, high-fidelity training data split constrained to fit in memory."""
+        gt_file = train_dir / "train_ground_truth.tsv"
+        s1_file = train_dir / "train_source1.tsv"
+        s2_file = train_dir / "train_source2.tsv"
+        s3_file = train_dir / "train_source3.tsv"
+
+        # Load ground truth labels
+        gt_df = GroundTruthLoader.load_ground_truth(gt_file)
+        total_queries = len(gt_df)
+
+        if max_queries <= 0 or total_queries <= max_queries:
+            train_s1 = cls.load_source_tsv(s1_file, expected_prefix="S1")
+            train_s2 = cls.load_source_tsv(s2_file, expected_prefix="S2")
+            train_s3 = cls.load_source_tsv(s3_file, expected_prefix="S3")
+            return train_s1, train_s2, train_s3, gt_df
+
+        print(
+            f"  [Memory Optimization] Sampling {max_queries} representative queries from {total_queries} total entities..."
+        )
+        # Stratify by match type: multi-match (crucial), single-match, and singletons
+        multi_mask = gt_df["matched_entity_ids"].str.contains(",")
+        single_mask = (gt_df["matched_entity_ids"] != "") & (~multi_mask)
+        singleton_mask = gt_df["matched_entity_ids"] == ""
+
+        multi_df = gt_df[multi_mask]
+        single_df = gt_df[single_mask]
+        singleton_df = gt_df[singleton_mask]
+
+        remaining = max_queries - len(multi_df)
+        if remaining > 0:
+            n_single = min(len(single_df), int(remaining * 0.70))
+            n_singleton = min(len(singleton_df), remaining - n_single)
+            sampled_single = single_df.sample(n=n_single, random_state=seed)
+            sampled_singleton = singleton_df.sample(n=n_singleton, random_state=seed)
+            sampled_gt = pd.concat([multi_df, sampled_single, sampled_singleton], ignore_index=True)
+        else:
+            sampled_gt = multi_df.sample(n=max_queries, random_state=seed)
+
+        sampled_s1_ids = set(sampled_gt["source1_entity_id"])
+
+        # Collect true target IDs
+        true_targets: Set[str] = set()
+        for raw in sampled_gt["matched_entity_ids"]:
+            if raw:
+                true_targets.update([t.strip() for t in raw.split(",") if t.strip()])
+
+        s2_required = {t for t in true_targets if t.startswith("S2-")}
+        s3_required = {t for t in true_targets if t.startswith("S3-")}
+
+        print(
+            f"  [Memory Optimization] Loading sampled S1 ({len(sampled_s1_ids)} entities) and relevant S2/S3 targets..."
+        )
+        train_s1 = cls.load_filtered_source_tsv(
+            s1_file, expected_prefix="S1", filter_ids=sampled_s1_ids
+        )
+        train_s2 = cls.load_filtered_source_tsv(
+            s2_file, expected_prefix="S2", required_ids=s2_required, max_background=200000, seed=seed
+        )
+        train_s3 = cls.load_filtered_source_tsv(
+            s3_file, expected_prefix="S3", required_ids=s3_required, max_background=200000, seed=seed
+        )
+
+        return train_s1, train_s2, train_s3, sampled_gt
+
+
 
 class GroundTruthLoader:
     """Loader and validator for competition ground truth matching labels."""
@@ -216,9 +370,9 @@ class GroundTruthLoader:
                 )
 
         # Validate matched_entity_ids format and targets
-        for idx, row in df.iterrows():
-            s1_id = row["source1_entity_id"]
-            raw_targets = row["matched_entity_ids"]
+        s1_ids = df["source1_entity_id"].tolist()
+        raw_targets_list = df["matched_entity_ids"].tolist()
+        for idx, (s1_id, raw_targets) in enumerate(zip(s1_ids, raw_targets_list)):
             if not raw_targets:
                 continue
 

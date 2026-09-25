@@ -195,3 +195,42 @@ def test_bipartite_graph_analyzer_leak_free_folds():
     # Folds must be deterministic with same seed
     folds_repeat = analyzer.create_leak_free_folds(k_folds=k_folds, random_seed=42)
     assert folds == folds_repeat
+
+
+def test_load_training_split_and_filtered_tsv(tmp_path):
+    # Create synthetic directory structure
+    train_dir = tmp_path / "train"
+    train_dir.mkdir()
+
+    s1_lines = ["entity_id\tbusiness_name\tbusiness_address\tcountry\n"]
+    gt_lines = ["source1_entity_id\tmatched_entity_ids\n"]
+    for i in range(50):
+        s1_lines.append(f"S1-{i}\tAcme Corp {i}\t123 Main St\tUS\n")
+        if i < 10:
+            gt_lines.append(f"S1-{i}\tS2-{i},S3-{i}\n")
+        elif i < 30:
+            gt_lines.append(f"S1-{i}\tS2-{i}\n")
+        else:
+            gt_lines.append(f"S1-{i}\t\n")
+
+    s2_lines = ["entity_id\tbusiness_name\tbusiness_address\tcountry\n"]
+    s3_lines = ["entity_id\tbusiness_name\tbusiness_address\tcountry\n"]
+    for i in range(100):
+        s2_lines.append(f"S2-{i}\tAcme Corp {i}\t123 Main St Suite {i}\tUS\n")
+        s3_lines.append(f"S3-{i}\tAcme Corp {i}\t123 Main St Fl {i}\tUS\n")
+
+    (train_dir / "train_source1.tsv").write_text("".join(s1_lines), encoding="utf-8")
+    (train_dir / "train_source2.tsv").write_text("".join(s2_lines), encoding="utf-8")
+    (train_dir / "train_source3.tsv").write_text("".join(s3_lines), encoding="utf-8")
+    (train_dir / "train_ground_truth.tsv").write_text("".join(gt_lines), encoding="utf-8")
+
+    # Test load_training_split with max_queries constraint
+    s1, s2, s3, gt = TSVLoader.load_training_split(train_dir, max_queries=20, seed=42)
+    assert len(gt) == 20
+    assert len(s1) == 20
+    assert len(s2) > 0
+    assert len(s3) > 0
+    # Must preserve multi-match entities
+    multi_count = sum(1 for m in gt["matched_entity_ids"] if "," in m)
+    assert multi_count == 10  # All 10 multi-match entities retained
+
