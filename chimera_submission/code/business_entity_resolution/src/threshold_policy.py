@@ -59,6 +59,44 @@ def predict_match_set(
     return selected or [top1_id]
 
 
+def predict_match_set_nofallback(
+    candidate_ids: Sequence[str], scores: Sequence[float],
+    pair_threshold: float, entity_threshold: float,
+    max_matches: int | None = None,
+) -> list[str]:
+    """Phase G Policy D: entity gate + pair gate, NO forced top-1 fallback.
+
+    Uncertain entities (gate passes but nothing passes pair_threshold) return
+    empty instead of a coerced single. Optional max_matches caps multi-match
+    output (covers 99.9% of truth mass at 6-8). Output is a candidate subset
+    ordered by score, then candidate ID.
+    """
+    pair_threshold = _threshold(pair_threshold, "pair_threshold")
+    entity_threshold = _threshold(entity_threshold, "entity_threshold")
+    if max_matches is not None and (isinstance(max_matches, bool) or max_matches < 1):
+        raise ValueError("max_matches must be positive when set")
+    ordered = _ordered_candidates(candidate_ids, scores)
+    if not ordered or ordered[0][1] < entity_threshold:
+        return []
+    selected = [identifier for identifier, score in ordered if score >= pair_threshold]
+    if max_matches is not None:
+        selected = selected[:max_matches]
+    return selected
+
+
+def fine_threshold_grid(lo: float, hi: float, n: int) -> tuple[float, ...]:
+    """Phase G helper: evenly spaced [0,1] grid with n>=1 points (not quantiles)."""
+    _threshold(lo, "lo")
+    _threshold(hi, "hi")
+    if isinstance(n, bool) or n < 1:
+        raise ValueError("n must be positive")
+    if hi < lo:
+        raise ValueError("hi must be >= lo")
+    if n == 1:
+        return (float(lo),)
+    return tuple(round(lo + (hi - lo) * i / (n - 1), 6) for i in range(n))
+
+
 def predict_policy(
     policy: PolicyName, candidate_ids: Sequence[str], scores: Sequence[float],
     pair_threshold: float, entity_threshold: float | None = None,
