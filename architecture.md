@@ -84,22 +84,20 @@ Pair scores are grouped by S1 `entity_id`. This step transitions the data from p
 ## 9. Entity-level Decision / Meta-model
 
 An optional secondary model that decides the predicted match set (zero, one, or multiple matches) using the complete candidate-score distribution.
+- **Deterministic baseline:** Group every OOF candidate by S1, sort by descending score then ascending candidate ID, and use the highest pair score as entity confidence. Deduplicate candidate IDs by their maximum score; output is always a subset of candidates. A missing candidate set produces an empty prediction.
+- **Decision Policies (Phase 10):** A = all candidates with score `>= pair_threshold`; B = empty if `top1_score < entity_threshold`, otherwise all candidates with score `>= pair_threshold`, falling back to top-1 if none pass; C = B's entity gate, then top-1 only when `top1_score - top2_score >= gap_threshold`, otherwise B's pair gate and fallback. For one candidate the decision gap is `+inf`; tied top scores have gap zero. All three thresholds are independently configurable. The entity gate rejects strictly below threshold, while pair and gap gates accept equality.
 - **Evaluation:** Compare empirically:
-  A. Pair score + deterministic threshold
-  B. Pair score + top-1 / score-gap logic
-  C. Pair score + entity-level meta-model
+  - Decision Policies A/B/C on leakage-safe OOF pair scores.
+  - Optional entity-level meta-model only after the deterministic baseline is measured.
 - **Justification:** The meta-model is kept only if it improves cross-fitted entity-level macro F₀.₅. If deterministic rules perform equally well, the simpler approach is retained.
 
 ---
 
 ## 10. Threshold Optimization & Robustness
 
-Thresholds (pair threshold, entity threshold, gap thresholds) are jointly optimized against the exact entity-level macro F₀.₅ metric using cross-fitted OOF predictions.
-- **Operational Robustness:** Evaluated via simulated domain shift (e.g., leave-one-country-out). A robust policy maximizes mean F₀.₅ while preserving acceptable worst-case fold/country performance and maintaining threshold stability against small score perturbations.
-- **Country Shift Remediation Rule:** If domain shift causes meaningful degradation, identify if it stems from the threshold policy. If yes, evaluate:
-  - **Policy A:** One global threshold.
-  - **Policy B:** Country/source-specific thresholds (must have sufficient labeled evidence).
-  - **Policy C:** A conservative global threshold chosen from the OOF-stable range.
+Search Policies A/B/C over the supplied pair/entity/gap threshold grid against exact entity-level macro F₀.₅. For each heldout OOF fold, select thresholds on other folds only; report heldout aggregate and fold scores, mean, standard deviation, worst fold, singleton precision and false-positive singleton rate, average predicted count, and empty/top-1/multi-match percentages. Compare families by worst heldout fold, then overall heldout macro F₀.₅, lower fold dispersion, and simpler policy on exact ties. Policy C is not presumed best. Refit the chosen family's frozen thresholds on all training OOF rows, reporting this exploratory fit separately from the cross-fitted comparison. The frozen policy/configuration must use the same pure decision function at inference.
+- **Operational Robustness:** Report caller-specified ± threshold sensitivity and leave-one-country-out OOF performance where labeled sample size is sufficient. Do not invent cutoffs or label the all-OOF fit an unbiased validation score.
+- **Country Shift Remediation Rule:** If domain shift causes meaningful degradation, identify if it stems from the threshold policy. If yes, compare one global threshold, country/source-specific thresholds with sufficient labeled evidence, and a conservative OOF-stable global threshold. These geographic variants are distinct from Decision Policies A/B/C.
 - **Test-Set Rule (Absolute):** Test distribution may be monitored, but test distribution may NOT determine thresholds. No automatic unlabeled test overrides are permitted. Conservative thresholds must be validated on labeled OOF data.
 - **Downstream Re-optimization:** Whenever an upstream change occurs (e.g., retrieval, K, pair model), thresholds must NEVER be reused. Re-optimizing thresholds on the new OOF distribution is mandatory.
 

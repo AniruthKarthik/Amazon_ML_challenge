@@ -50,14 +50,18 @@ This plan executes the architecture through evidence-driven gates. No downstream
 ## Phase 9: Entity-Level Decision + Exact F₀.₅
 - Group OOF pair predictions by source entity.
 - Calculate the exact macro F₀.₅.
+- Summarize top-1 score, second score, and gap for Phase 10's deterministic gate: reject below entity threshold; select top-1 at or above gap threshold; otherwise keep all pair scores at or above pair threshold, with top-1 fallback. One-candidate gap is `+inf` for decisions; tied top scores have gap zero.
 - Compare Raw vs Calibrated pathways. Reject calibration if it provides no F₀.₅ or stability win.
+- Include zero-candidate entities and multiple valid S1 links; retain exact empty-truth singleton scoring.
 - *Dependency:* Phase 8 OOF predictions.
 
 ## Phase 10: Threshold Optimization & Robust Policy Selection
-- Jointly optimize pair, entity, and gap thresholds.
-- Simulate country/domain shifts. Evaluate threshold policies via trade-off analysis (mean F₀.₅, worst-case fold/country, variance).
-- Compare Global (A), Country-specific (B), and Conservative OOF-stable (C) policies if degradation is observed.
+- Freeze a reusable deterministic rule: deduplicate candidate IDs, sort by descending pair score then ascending ID; empty candidates or `top1_score < entity_threshold` yield empty; otherwise `gap >= gap_threshold` yields top-1; otherwise retain all candidates with score `>= pair_threshold`, falling back to top-1 if none pass. One candidate has `gap = +inf`, tied top scores have gap zero. Output remains a candidate subset.
+- Jointly search independent pair/entity/gap thresholds on leakage-safe training OOF predictions and exact entity macro F₀.₅. Compare decision A (pair-only), B (entity gate + pair gate + top-1 fallback), and C (full score-gap rule); never assume C wins.
+- Select fold thresholds on other OOF folds, report heldout overall/fold mean/std/worst, singleton precision/false-positive singleton rate, mean prediction count, and empty/top-1/multi percentages. Fit frozen selected-family thresholds on all OOF data separately; serialize configuration and search report. No test labels or distribution for selection.
+- Simulate country/domain shifts and caller-specified ± threshold perturbations. If shift degrades results, compare global, sufficiently supported country/source-specific, and conservative OOF-stable global *geographic* policies; these are separate from decision A/B/C.
 - *Decision:* Lock the robust policy. Unlabeled test data may NOT determine thresholds.
+- *Compute gate:* Implement and unit-test locally; execute the full OOF search and freeze measured thresholds in Colab before Phase 11.
 - *Dependency:* Phase 9 entity aggregations.
 
 ## Phase 11: Hard-Negative Mining

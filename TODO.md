@@ -108,6 +108,7 @@
 **Objective:** Aggregate pair scores and compute the exact competition metric.
 - [x] Implement entity-level score aggregation (max, second, counts, gaps, distribution).
 - [x] Implement exact macro F₀.₅, including empty-list singleton scoring.
+- [x] Define Phase 10 inputs: top-1 entity confidence, top-2 score/gap, zero-candidate state, and all candidate pair scores; preserve multi-positive truth for exact set scoring. The deterministic rule uses `<` for entity rejection and `>=` for gap/pair acceptance.
 - [x] Implement same-threshold Raw-vs-Calibrated OOF macro F₀.₅ comparison.
 - [ ] Run the full OOF entity comparison in Colab; keep calibration only if measured macro F₀.₅ or threshold stability improves.
 **Decision Gate:** Keep Isotonic Calibration ONLY if it improves Entity F₀.₅ or threshold stability.
@@ -115,14 +116,14 @@
 ## Phase 10: Threshold Optimization & Robust Policy Selection
 
 **Objective:** Jointly optimize decision thresholds and operationally define robust policy against country shift.
-- [ ] Optimize pair threshold, entity threshold, and gap thresholds jointly on OOF entity F₀.₅.
-- [ ] Run threshold stability analysis (fold dispersion, ± sensitivity).
-- [ ] Simulate country/domain shift (e.g., leave-one-country-out). Measure mean F₀.₅, worst-fold/country F₀.₅, and variance.
+- [x] Implement the pure deterministic C rule: sort unique candidates by descending score/ascending ID; zero candidates → empty; `top1 < entity_threshold` → empty; else `gap >= gap_threshold` → top-1; else all scores `>= pair_threshold`, or top-1 fallback when none pass. One candidate has decision gap `+inf`; tied top scores have gap zero. Output is a candidate subset.
+- [x] Implement comparison baselines A (pair threshold only) and B (entity gate + pair threshold + top-1 fallback), separate from C. Independently configure all three thresholds and serialize the frozen policy.
+- [x] Implement OOF-only joint threshold search and cross-fitted fold evaluation with exact entity F₀.₅; report overall, fold-wise, mean/std/worst, singleton precision/false-positive singleton rate, average predicted count, and empty/top-1/multi percentages. Select C only if its heldout F₀.₅ and worst-fold robustness justify it.
+- [x] Implement threshold sensitivity (caller-supplied ± perturbation) and leave-one-country-out diagnostics; use synthetic tests locally.
+- [ ] Run the full OOF search, robustness diagnostics, and frozen configuration/report generation in Colab. The all-OOF frozen-threshold fit is exploratory, distinct from cross-fitted model-selection metrics.
 - [ ] If country shift causes meaningful degradation, execute threshold remediation rule:
   - Check if degradation is driven by threshold policy.
-  - Evaluate Policy A: Global Threshold.
-  - Evaluate Policy B: Country/source-specific thresholds (only if labeled validation evidence supports).
-  - Evaluate Policy C: Conservative global threshold from OOF-stable range (only if validation confirms better worst-case robustness).
+  - Evaluate one global threshold, country/source-specific thresholds (only if labeled evidence supports), and a conservative OOF-stable global threshold (only if validation confirms better worst-case robustness). These geographic variants are not decision Policies A/B/C.
   - Select policy via cross-fitted validation tradeoff (mean score vs variance vs worst-case).
 **Metrics:** Entity F₀.₅ mean, worst-case, variance, stability dispersion.
 **Decision Gate:** Lock the robust threshold policy. Test distribution may NOT determine thresholds. No automatic test-time overrides allowed.

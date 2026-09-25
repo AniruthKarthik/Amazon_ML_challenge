@@ -112,3 +112,28 @@ concentration. `compare_oof_score_paths` streams source-sorted candidate rows
 and compares raw and calibrated OOF scores at the same supplied threshold,
 including entities with no candidates. It does not select calibration or a
 final threshold; those decisions require full OOF results in Colab.
+
+## Phase 10: frozen match-set policy and OOF threshold search
+
+`src.threshold_policy.predict_match_set` implements decision Policy C. It sorts
+unique candidates by descending score then ascending ID, uses the top score as
+entity confidence, rejects only when `top1 < entity_threshold`, picks top-1
+when `gap >= gap_threshold`, otherwise retains every score `>= pair_threshold`
+with top-1 fallback. A single candidate has decision gap `+inf`; a tie has
+gap zero. Policies A (pair gate only) and B (entity + pair gates, with fallback)
+are available through `predict_policy`. `FrozenDecisionConfig` serializes the
+selected rule and reuses its exact prediction function at inference.
+
+`src.threshold_search.assemble_oof_entities` accepts all training S1 truth,
+entity fold/country maps, and Phase 8 OOF pair arrays (raw or calibrated).
+Include zero-candidate S1 entities. Supply an explicit `ThresholdGrid` to
+`search_thresholds`; no grid values are built in. Each heldout fold's threshold
+is selected from other OOF folds, and all three decision policies are compared
+by worst heldout fold, then overall macro F₀.₅, dispersion, and simplicity.
+The chosen family's all-OOF threshold refit is separately labeled exploratory.
+Run `threshold_sensitivity` with a chosen perturbation and
+`leave_one_country_out` with a chosen minimum country size, then serialize via
+`save_search_report` and `save_frozen_config`. The search artifact records the
+grid, selected thresholds, fold and country diagnostics, singleton error
+rates, and decision proportions. These functions are implemented and covered
+by synthetic tests; project-data search and threshold freezing await Colab.
