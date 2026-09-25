@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+"""Main entry point for Business Entity Resolution pipeline.
+
+Runs data loading, multi-view normalization, candidate retrieval, pair feature engineering,
+LightGBM cross-fitting, threshold optimization, and deterministic frozen inference.
+Outputs matching_results.tsv and candidate_pairs.tsv.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+from pathlib import Path
+import pandas as pd
+
+from chimera_submission.code.business_entity_resolution.src.data_contract import (
+    GroundTruthLoader,
+    TSVLoader,
+)
+from chimera_submission.code.business_entity_resolution.src.pipeline import (
+    BusinessEntityResolutionPipeline,
+    PipelineConfig,
+)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run Business Entity Resolution end-to-end pipeline."
+    )
+    parser.add_argument(
+        "--train-dir",
+        type=str,
+        default="dataset/train",
+        help="Path to folder containing train_source1/2/3.tsv and train_ground_truth.tsv",
+    )
+    parser.add_argument(
+        "--test-dir",
+        type=str,
+        default="dataset/test",
+        help="Path to folder containing test_source1/2/3.tsv",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default="chimera_submission/output",
+        help="Path to directory where matching_results.tsv and candidate_pairs.tsv will be saved",
+    )
+    parser.add_argument(
+        "--k-folds",
+        type=int,
+        default=5,
+        help="Number of cross-validation folds (default: 5)",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for reproducibility (default: 42)",
+    )
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    print("=" * 70)
+    print("ML Challenge 2026: Business Entity Resolution Pipeline")
+    print(f"  Train Directory:  {args.train_dir}")
+    print(f"  Test Directory:   {args.test_dir}")
+    print(f"  Output Directory: {args.output_dir}")
+    print(f"  Folds:            {args.k_folds}")
+    print(f"  Seed:             {args.seed}")
+    print("=" * 70)
+
+    train_path = Path(args.train_dir)
+    test_path = Path(args.test_dir)
+    out_path = Path(args.output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    # 1. Load Training Data
+    print("\n[Phase 1] Loading and validating training data...")
+    s1_train_file = train_path / "train_source1.tsv"
+    s2_train_file = train_path / "train_source2.tsv"
+    s3_train_file = train_path / "train_source3.tsv"
+    gt_file = train_path / "train_ground_truth.tsv"
+
+    train_s1 = TSVLoader.load_source_tsv(s1_train_file, expected_prefix="S1")
+    train_s2 = TSVLoader.load_source_tsv(s2_train_file, expected_prefix="S2")
+    train_s3 = TSVLoader.load_source_tsv(s3_train_file, expected_prefix="S3")
+    gt_df = GroundTruthLoader.load_ground_truth(
+        gt_file, valid_s1_ids=set(train_s1["entity_id"])
+    )
+    print(
+        f"  Loaded Train S1: {len(train_s1)}, S2: {len(train_s2)}, S3: {len(train_s3)}, Ground Truth: {len(gt_df)}"
+    )
+
+    # 2. Fit Pipeline & Cross-Validate
+    print("\n[Phase 2-10] Fitting pipeline & optimizing robust decision thresholds...")
+    config = PipelineConfig(k_folds=args.k_folds, random_seed=args.seed)
+    pipeline = BusinessEntityResolutionPipeline(config=config)
+    pipeline.fit(train_s1, train_s2, train_s3, gt_df)
+
+    rep = pipeline.ablation_report
+    print(f"  OOF Pair AUC:            {rep.get('pair_auc', 0.0):.4f}")
+    print(f"  OOF Pair PR-AUC:         {rep.get('pair_pr_auc', 0.0):.4f}")
+    print(f"  Locked Robust Macro F0.5: {rep.get('best_macro_f05', 0.0):.4f}")
+    print(f"  Locked Decision Policy:  {rep.get('locked_policy')}")
+
+    # 3. Load Test Data
+    print("\n[Phase 16] Loading and validating test data...")
+    test_s1_file = test_path / "test_source1.tsv"
+    test_s2_file = test_path / "test_source2.tsv"
+    test_s3_file = test_path / "test_source3.tsv"
+
+    test_s1 = TSVLoader.load_source_tsv(test_s1_file, expected_prefix="S1")
+    test_s2 = TSVLoader.load_source_tsv(test_s2_file, expected_prefix="S2")
+    test_s3 = TSVLoader.load_source_tsv(test_s3_file, expected_prefix="S3")
+    print(
+        f"  Loaded Test S1: {len(test_s1)}, S2: {len(test_s2)}, S3: {len(test_s3)}"
+    )
+
+    # 4. Predict
+    print("\n[Phase 16] Executing frozen inference on test set...")
+    matching_df, candidates_df = pipeline.predict(test_s1, test_s2, test_s3)
+
+    # 5. Export Results
+    matching_out = out_path / "matching_results.tsv"
+    candidates_out = out_path / "candidate_pairs.tsv"
+
+    matching_df.to_csv(matching_out, sep="\t", index=False, encoding="utf-8")
+    candidates_df.to_csv(candidates_out, sep="\t", index=False, encoding="utf-8")
+    print(f"  Saved final matches to: {matching_out} ({len(matching_df)} rows)")
+    print(f"  Saved candidate pairs to: {candidates_out} ({len(candidates_df)} rows)")
+
+    print("\nPipeline execution completed successfully.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
