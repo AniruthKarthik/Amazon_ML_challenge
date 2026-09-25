@@ -260,6 +260,7 @@ def train_cpu_baseline(
         "retrieval_channels": store.channels,
         "retrieval_top_k": store.top_k,
         "retrieval_max_candidates": store.max_candidates,
+        "retrieval_dense_top_k": store.dense_top_k,
     }
     (building / "training_report.json").write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")

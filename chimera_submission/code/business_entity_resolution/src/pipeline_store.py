@@ -126,6 +126,7 @@ class DiskCandidateStore:
         self.target_count = connection.execute("SELECT COUNT(*) FROM targets").fetchone()[0]
         self.top_k = top_k
         self.max_candidates = max_candidates
+        self.dense_top_k = dense_top_k if dense_work_dir is not None else None
         self.channels = CHANNELS + ((DENSE_CHANNEL,) if dense_work_dir else ())
         work_dir = Path(work_dir)
         self.indices = {

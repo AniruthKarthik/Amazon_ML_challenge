@@ -2,11 +2,30 @@
 
 Team: `chimera`
 
-## Expected interface
+## CPU pipeline interface
 
 ```bash
-python src/main.py --data-dir /path/to/dataset --output-dir /path/to/output
+python -m src.phase4_benchmark --train-dir /path/to/dataset/train \
+  --output-dir /path/to/phase4-report --work-dir /path/to/phase4-work
+python -m src.main train --phase4-work /path/to/phase4-work \
+  --model-dir /path/to/model --train-entities 10000
+python -m src.main prepare-test --test-dir /path/to/dataset/test \
+  --model-dir /path/to/model --test-work /path/to/test-work
+python -m src.main predict --model-dir /path/to/model \
+  --test-work /path/to/test-work --output-dir /path/to/output \
+  --allow-exploratory
+python -m src.main validate --test-work /path/to/test-work \
+  --output-dir /path/to/output
 ```
+
+Run these from this directory. `--train-entities` is an explicit resource/sample
+choice, not a measured or recommended optimum; increase it only within your CPU
+memory budget. The sampled model and outputs are **exploratory**, not a Phase 15
+locked final submission. The Phase 4 command can take substantial time on the
+full dataset; completed channels are reused. The internal validator checks
+target IDs via SQLite without loading all IDs into RAM. For the official
+memory-heavy check, add `--test-dir /path/to/dataset/test --official-check-ids`
+to `src.main validate`. No command reads test labels or test ground truth.
 
 ## Phase 1: input validation
 
@@ -206,4 +225,7 @@ completed lexical channel arrays (and optional dense arrays) as memory maps,
 unions and caps hits with deterministic provenance, and fetches only one S1's
 target records at a time. New rare-token runs persist their actual score array;
 older Phase 4 work without it uses a documented reciprocal-rank surrogate.
-The training/prediction runner is the next implementation step.
+The staged CPU runner above consumes these arrays. If the optional dense branch
+is accepted by OOF evaluation, pass its training directory to `train` with
+`--dense-work` and its unlabeled test directory to `predict` with
+`--dense-test-work`; the runner rejects channel-schema mismatches.

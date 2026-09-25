@@ -179,6 +179,7 @@
 
 **Objective:** Execute the locked policy on test data without label leakage.
 - [x] Implement a validated, unlabeled test SQLite store and disk-backed lexical/dense candidate bridge with bounded per-query records, deterministic dedup/cap/provenance, and array-size checks. The existing Phase 4 work directory is read-only to this bridge.
+- [x] Implement staged CPU CLI for sampled training, unlabeled test retrieval, frozen batched inference, and streaming internal output validation; exploratory models require an explicit inference acknowledgment. Tiny synthetic official `--check-ids` integration test passes.
 - [ ] Apply frozen transformations, retrieval, scoring, and locked thresholds to test set.
 - [ ] Run internal ID/format validators and official validator with `--check-ids`.
 **Acceptance Criteria:** Identical deterministic outputs across runs, validators PASS.
