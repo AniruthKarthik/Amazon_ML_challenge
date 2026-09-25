@@ -24,8 +24,8 @@ This plan executes the architecture through evidence-driven gates. No downstream
 ## Phase 4: Retrieval Benchmark & Bottleneck Analysis
 - Evaluate Phase 3 channels using oracle entity-level F₀.₅, candidate recall, and channel diversity.
 - Crucially, measure **Unique GT Recovered** to test if channels actually add new true matches.
-- Measure explicit **Retrieval miss rate** and **Ranking failure rate** to identify the bottleneck.
-- *Decision:* Quantitative results explicitly drive independent conditional branches (Phase 5, Phase 13, Phase 14).
+- Measure explicit **Retrieval miss rate** here. Defer **Ranking failure rate** until Phase 8 provides OOF LightGBM scores; report top-1, Recall@5/10, and false-positive competition separately from retrieval misses.
+- *Decision:* Quantitative retrieval results drive independent Phase 5 and Phase 13 branches; post-Phase-8 OOF ranking results gate Phase 14.
 - *Dependency:* Phase 3 candidates + Phase 1 folds.
 
 ## Phase 5: Word TF-IDF Retrieval Experiment (Independent Conditional)
@@ -79,10 +79,10 @@ This plan executes the architecture through evidence-driven gates. No downstream
 - *Dependency:* Phase 4 bottleneck analysis (independent of Phase 5).
 
 ## Phase 14: Cross-Encoder Pair Scoring (Conditional)
-- If Phase 4 explicit ranking failure rate was substantial, evaluate Cross-encoders.
+- If the post-Phase-8 OOF ranking failure rate is substantial, evaluate Cross-encoders.
 - **MANDATORY RE-OPTIMIZATION:** Re-run Phase 7 (Pair Model) → 8 → 9 → 10.
 - *Decision:* Keep ONLY if final entity F₀.₅ materially improves.
-- *Dependency:* Phase 4 quantitative ranking failure rate.
+- *Dependency:* Post-Phase-8 quantitative OOF ranking failure rate.
 
 ## Phase 15: Final Ablations
 - Evaluate final ensembles (LightGBM vs CatBoost/LR Stacker).

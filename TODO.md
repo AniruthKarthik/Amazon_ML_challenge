@@ -46,7 +46,7 @@
 
 ## Phase 4: Retrieval Benchmark + Error Taxonomy
 
-**Objective:** Measure whether base lexical retrieval recovers ground-truth candidates, and explicitly quantify retrieval vs ranking failures.
+**Objective:** Measure whether base lexical retrieval recovers ground-truth candidates; keep retrieval misses separate from ranking failures measured after Phase 8.
 - [x] Implement Micro candidate recall and Entity complete/any-hit recall.
 - [x] Implement Oracle entity-level F₀.₅ (assumes perfect pair classification).
 - [x] Implement retrieval diversity, incremental unions, and **Unique GT Recovered** per channel.
@@ -54,13 +54,13 @@
 - [x] Implement reproducible sampling and taxonomy for up to 1000 genuine retrieval misses.
 - [ ] Execute the full-training benchmark in Colab, produce the quantitative report, and make the measured lexical/Word TF-IDF/Dense decision.
 - [ ] After Phases 7/8, calculate ranking failures from OOF LightGBM scores, including top-1, Recall@5/10, and false-positive competition; no Phase 4 ranking rate is claimed.
-**Metrics:** Oracle F₀.₅, Unique GT Recovered per channel, Retrieval Miss Rate, Ranking Failure Rate.
+**Metrics:** Oracle F₀.₅, Unique GT Recovered per channel, Retrieval Miss Rate; post-Phase-8 OOF Ranking Failure Rate.
 **Acceptance Criteria:** Explicit quantitative error metric report produced.
 **Decision Gate:** 
   - If token/reordering misses dominate retrieval errors: trigger Phase 5 (Word TF-IDF).
   - If semantic/linguistic misses dominate retrieval errors: trigger Phase 13 (Dense Retrieval).
   - (Note: Phase 5 and Phase 13 are independent conditional branches).
-  - If quantitative ranking failure rate is substantial: mark Phase 14 (Cross-encoder) eligible for evaluation after Phase 10.
+  - After Phase 8, if quantitative OOF ranking failure is substantial: mark Phase 14 (Cross-encoder) eligible for evaluation after Phase 10.
 
 ## Phase 5: Word TF-IDF Retrieval Experiment (Independent Conditional)
 
@@ -95,9 +95,10 @@
 ## Phase 8: OOF Pair Predictions
 
 **Objective:** Generate leakage-safe predictions to drive entity-level decisions.
-- [ ] Generate out-of-fold (OOF) predictions for all train candidates.
-- [ ] Generate OOF predictions for raw LightGBM scores.
-- [ ] Fit isotonic calibration on OOF scores and generate calibrated OOF scores.
+- [x] Implement component-disjoint OOF raw LightGBM pair predictions.
+- [x] Implement nested cross-fitted isotonic calibration without held-out-label reuse.
+- [x] Implement label-free OOF score artifact and multi-positive-aware ranking diagnostics.
+- [ ] Run full-training OOF predictions and report pair F₀.₅ and retrieved-pair ranking failure/Recall@5/10 in Colab.
 **Metrics:** OOF Pair F₀.₅.
 **Acceptance Criteria:** No entity crosses fold boundaries during generation.
 **Next Decision:** Proceed to Phase 9.
@@ -155,8 +156,8 @@
 
 ## Phase 14: Cross-Encoder Pair Scoring (Conditional)
 
-**Objective:** Address persistent pairwise ranking errors explicitly measured in Phase 4.
-- [ ] If Phase 4 ranking failure rate was substantial, add OOF cross-encoder score as feature to LightGBM.
+**Objective:** Address persistent pairwise ranking errors measured after Phase 8 using OOF LightGBM scores.
+- [ ] If the post-Phase-8 OOF ranking failure rate is substantial, add OOF cross-encoder score as feature to LightGBM.
 - [ ] **MANDATORY RE-EVALUATION:** Re-run Phase 7 (Pair Model) → Phase 8 (OOF) → Phase 9 (Aggregation) → Phase 10 (Thresholds).
 **Decision Gate:** Keep ONLY if final entity F₀.₅ materially improves.
 

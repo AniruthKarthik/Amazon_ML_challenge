@@ -46,15 +46,15 @@ Generates candidates via immutable, reproducible, and auditable channels.
 
 ## 5. Retrieval Evaluation & Bottleneck Analysis
 
-Phase 4 evaluates channels on diversity, downstream potential, and explicitly separates retrieval vs. ranking failures.
+Phase 4 evaluates channels on diversity and downstream potential. Ranking failures are measured separately after Phase 8 using OOF LightGBM scores.
 - **Diversity Measurement:** Track exact overlaps and unions (e.g., R_exact ∪ R_char). Critically, track **Unique GT Recovered** to determine how many true matches a channel recovers that were missed by all other channels.
 - **Explicit Error Metrics:**
   - **Retrieval miss rate** = `(GT pairs absent from candidate set) / (all GT pairs)`
-  - **Ranking failure rate** = `(GT pairs present in candidates but failing ranking criterion) / (GT pairs present in candidates)`
+  - **Post-Phase-8 OOF top-1 ranking failure rate** = `(retrieved GT pairs ranked below first) / (retrieved GT pairs)`; also report retrieved-pair Recall@5/10 and false-positive competition without mixing in retrieval misses.
 - **Decision Logic:** 
   - If token/reordering misses dominate retrieval errors → Evaluate Word TF-IDF.
   - If semantic/linguistic misses dominate retrieval errors → Evaluate Dense Retrieval.
-  - If ranking failure rate is substantial → Evaluate Cross-Encoder.
+  - If post-Phase-8 OOF ranking failure rate is substantial → Evaluate Cross-Encoder.
   - Note: Word TF-IDF and Dense Retrieval are independent, parallel conditional branches.
 
 ---
@@ -128,7 +128,7 @@ Improves the pair model's discriminative power.
 These components are independently triggered based on specific error taxonomy evidence from Phase 4. None are mandatory.
 1. **Word-level TF-IDF retrieval:** Triggered by token/reordering misses. Evaluated independently of Dense Retrieval.
 2. **Dense bi-encoder retrieval:** Triggered by semantic/linguistic misses. Evaluated independently of Word TF-IDF. Accepted ONLY if it yields a net improvement in the FINAL cross-fitted entity-level macro F₀.₅, not just candidate recall.
-3. **Cross-encoder pair scoring:** Triggered by high quantitative ranking failure rates. Purpose: resolve difficult retrieved pairwise ranking/classification cases.
+3. **Cross-encoder pair scoring:** Triggered by high post-Phase-8 OOF ranking failure rates. Purpose: resolve difficult retrieved pairwise ranking/classification cases.
 4. **Isotonic score calibration:** Evaluated as an optional transformation of pair scores if it improves downstream entity-level F₀.₅ or threshold stability.
 
 ---

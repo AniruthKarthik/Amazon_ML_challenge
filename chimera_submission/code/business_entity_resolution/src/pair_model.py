@@ -14,17 +14,14 @@ from sklearn.metrics import precision_score, recall_score, roc_auc_score
 from sklearn.model_selection import GroupKFold
 
 
-def assign_component_folds(components: Iterable[Iterable[str]],
-                           source_ids: Iterable[str],
-                           n_splits: int = 5) -> dict[str, int]:
-    """Assign every S1 entity to exactly one Phase 1 truth-graph component fold."""
+def source_component_ids(components: Iterable[Iterable[str]],
+                         source_ids: Iterable[str]) -> dict[str, int]:
+    """Map every S1 entity to its Phase 1 truth-graph component."""
     ids = sorted(source_ids)
     if len(ids) != len(set(ids)) or not ids:
         raise ValueError("source IDs must be nonempty and unique")
     if any(not identifier.startswith("S1-") for identifier in ids):
         raise ValueError("fold assignment accepts S1 IDs only")
-    if n_splits < 2:
-        raise ValueError("n_splits must be at least two")
     wanted = set(ids)
     component_by_source = {}
     for component_index, component in enumerate(components):
@@ -36,6 +33,17 @@ def assign_component_folds(components: Iterable[Iterable[str]],
             component_by_source[identifier] = component_index
     if set(component_by_source) != wanted:
         raise ValueError("components do not cover every S1 entity")
+    return component_by_source
+
+
+def assign_component_folds(components: Iterable[Iterable[str]],
+                           source_ids: Iterable[str],
+                           n_splits: int = 5) -> dict[str, int]:
+    """Assign every S1 entity to exactly one Phase 1 truth-graph component fold."""
+    if n_splits < 2:
+        raise ValueError("n_splits must be at least two")
+    ids = sorted(source_ids)
+    component_by_source = source_component_ids(components, ids)
     groups = np.asarray([component_by_source[identifier] for identifier in ids])
     if len(set(groups)) < n_splits:
         raise ValueError("fewer graph components than requested folds")

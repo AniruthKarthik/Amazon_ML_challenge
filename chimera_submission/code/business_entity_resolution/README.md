@@ -85,3 +85,20 @@ overlapping train/validation components and non-finite features. Local tests
 fit only tiny synthetic matrices; full training, memory checks, and learning-
 curve review are deferred to Colab. Pair diagnostics are not retrieval,
 ranking-failure, or entity-level accuracy estimates.
+
+## Phase 8: OOF scores and calibration
+
+`src.oof_predictions.generate_oof_predictions` scores each pair with a
+LightGBM model trained outside its truth-graph component fold. OOF models use
+fixed boosting rounds so held-out labels cannot select their iteration.
+Isotonic calibration uses an inner OOF loop within the other folds; its
+calibrated score for an outer fold never uses that fold's labels. The final
+calibrator fitted on all raw OOF scores is for later inference only, not OOF
+evaluation. At least three component folds are required. A label-free TSV can
+be written with `write_oof_artifact`.
+
+`src.oof_ranking.evaluate_oof_ranking` reports top-1 retrieved-pair ranking
+failure, retrieved-pair Recall@5/10, multi-positive entity any-hit rates, and
+false-positive competition from source-sorted raw OOF scores. Retrieval misses are counted
+separately and excluded from ranking-rate denominators. No project-data OOF
+training or ranking report has been run locally.
