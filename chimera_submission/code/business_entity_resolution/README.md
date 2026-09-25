@@ -8,7 +8,7 @@ Team: `chimera`
 python -m src.phase4_benchmark --train-dir /path/to/dataset/train \
   --output-dir /path/to/phase4-report --work-dir /path/to/phase4-work
 python -m src.main train --phase4-work /path/to/phase4-work \
-  --model-dir /path/to/model --train-entities 10000
+  --model-dir /path/to/model --train-entities 3000
 python -m src.main prepare-test --test-dir /path/to/dataset/test \
   --model-dir /path/to/model --test-work /path/to/test-work
 python -m src.main predict --model-dir /path/to/model \
@@ -18,9 +18,11 @@ python -m src.main validate --test-work /path/to/test-work \
   --output-dir /path/to/output
 ```
 
-Run these from this directory. `--train-entities` is an explicit resource/sample
-choice, not a measured or recommended optimum; increase it only within your CPU
-memory budget. The sampled model and outputs are **exploratory**, not a Phase 15
+Run these from this directory. The `3000` entity count is only a bounded smoke-run
+example, not a measured or recommended optimum; choose the actual
+`--train-entities` value within your CPU budget. At the default candidate cap,
+3000 S1 entities generate at most 750,000 pair rows, below the default
+one-million-pair matrix limit. The sampled model and outputs are **exploratory**, not a Phase 15
 locked final submission. The Phase 4 command can take substantial time on the
 full dataset; completed channels are reused. The internal validator checks
 target IDs via SQLite without loading all IDs into RAM. For the official
