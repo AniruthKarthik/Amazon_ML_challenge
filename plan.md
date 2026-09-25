@@ -61,7 +61,7 @@ This plan executes the architecture through evidence-driven gates. No downstream
 - Select fold thresholds on other OOF folds, report heldout overall/fold mean/std/worst, singleton precision/false-positive singleton rate, mean prediction count, and empty/top-1/multi percentages. Fit frozen selected-family thresholds on all OOF data separately; serialize configuration and search report. No test labels or distribution for selection.
 - Simulate country/domain shifts and caller-specified ± threshold perturbations. If shift degrades results, compare global, sufficiently supported country/source-specific, and conservative OOF-stable global *geographic* policies; these are separate from decision A/B/C.
 - *Decision:* Lock the robust policy. Unlabeled test data may NOT determine thresholds.
-- *Compute gate:* Implement and unit-test locally; execute the full OOF search and freeze measured thresholds in Colab before Phase 11.
+- *Compute gate:* Implement and unit-test locally; execute the full OOF search and freeze measured thresholds in the user's later CPU run before locking the final policy.
 - *Dependency:* Phase 9 entity aggregations.
 
 ## Phase 11: Hard-Negative Mining
@@ -71,9 +71,9 @@ This plan executes the architecture through evidence-driven gates. No downstream
 - *Dependency:* Phase 8 OOF errors.
 
 ## Phase 12: Entity-Level Decision / Meta Model
-- Train an explicit meta-model to make the set-decision (zero, one, many) using OOF meta-features.
-- **MANDATORY RE-OPTIMIZATION:** Re-run Phase 10 Thresholds on meta-model outputs.
-- *Decision:* Compare empirical performance of deterministic rules vs meta-model. Keep only if entity F₀.₅ improves.
+- Train a CPU-friendly three-class meta-model on score-only OOF entity aggregations. `ZERO` → empty, `ONE` → top-1, `MANY` → every candidate with score `>= multi_pair_threshold`, or top-1 fallback if none pass; never force two matches.
+- **MANDATORY RE-OPTIMIZATION:** Tune `multi_pair_threshold` on inner OOF meta predictions using exact entity macro F₀.₅. Re-run Phase 10 deterministic comparison on the same outer folds; no test-data tuning.
+- *Decision:* Keep only if cross-fitted entity F₀.₅ improves and explicit worst-fold/dispersion tolerances are met. Freeze the final CPU model and threshold for inference. Full run remains for local CPU execution.
 - *Dependency:* Phase 9 meta-features.
 
 ## Phase 13: Dense Bi-Encoder Retrieval (Independent Conditional)

@@ -46,7 +46,7 @@ per-S1 format and is produced by the later inference phase.
 Phase 3 retrieval channels, and writes `metrics.json`, `phase4_report.md`, a
 per-ground-truth-link retrieval-status TSV, and an auditable sample of genuine
 retrieval misses. It does not read test labels or estimate ranking failures.
-The complete training run and retrieval decision are deferred to Colab; the
+The complete training run and retrieval decision are deferred to the user's CPU run; the
 local tests use only small synthetic fixtures.
 
 ```bash
@@ -73,7 +73,7 @@ unlabeled, fold-appropriate record stream to `fit_from_records`; fit the TF-IDF
 encoders separately within each training fold when building OOF features.
 `transform` yields `(candidate, features)` pairs lazily, with no labels or
 ground-truth fields. Full-data feature materialization and timing are deferred
-to Colab after the retrieval decision.
+to the user's CPU run after the retrieval decision.
 
 ## Phase 7: pair-model baseline
 
@@ -83,7 +83,7 @@ LightGBM fold from numeric Phase 6 features and returns validation scores,
 learning history, and pair-level precision/recall/AUC diagnostics. It rejects
 overlapping train/validation components and non-finite features. Local tests
 fit only tiny synthetic matrices; full training, memory checks, and learning-
-curve review are deferred to Colab. Pair diagnostics are not retrieval,
+curve review are deferred to the user's CPU run. Pair diagnostics are not retrieval,
 ranking-failure, or entity-level accuracy estimates.
 
 ## Phase 8: OOF scores and calibration
@@ -111,7 +111,7 @@ per-S1 macro F₀.₅ exactly, including score 1 for a correctly empty singleton
 concentration. `compare_oof_score_paths` streams source-sorted candidate rows
 and compares raw and calibrated OOF scores at the same supplied threshold,
 including entities with no candidates. It does not select calibration or a
-final threshold; those decisions require full OOF results in Colab.
+final threshold; those decisions require full OOF results from the user's CPU run.
 
 ## Phase 10: frozen match-set policy and OOF threshold search
 
@@ -136,7 +136,7 @@ Run `threshold_sensitivity` with a chosen perturbation and
 `save_search_report` and `save_frozen_config`. The search artifact records the
 grid, selected thresholds, fold and country diagnostics, singleton error
 rates, and decision proportions. These functions are implemented and covered
-by synthetic tests; project-data search and threshold freezing await Colab.
+by synthetic tests; project-data search and threshold freezing await the user's CPU run.
 
 ## Phase 11: nested hard-negative mining
 
@@ -151,4 +151,21 @@ re-runs the same Phase 9/10 threshold search on baseline and mined raw scores;
 it reports, but does not automatically accept, any cross-fitted entity F₀.₅
 gain. If the calibrated pathway is retained, its nested OOF calibrator must
 also be regenerated before a final acceptance decision. Full project-data
-training, downstream re-optimization, and the keep/reject decision await Colab.
+training, downstream re-optimization, and the keep/reject decision await the
+user's local CPU run.
+
+## Phase 12: CPU entity meta-model
+
+`src.entity_meta_model.generate_meta_oof_decisions` trains a compact logistic
+ZERO/ONE/MANY classifier from score-only entity aggregates of pair OOF scores.
+For each outer fold it fits the classifier on other folds and tunes
+`multi_pair_threshold` from inner OOF class predictions using exact entity
+macro F₀.₅. ZERO returns empty, ONE top-1, and MANY every candidate above the
+threshold, falling back to top-1 if none pass; MANY never forces a second
+match. The final all-OOF model and threshold are exploratory until compared.
+`compare_meta_to_phase10` takes the selected Phase 10 family's per-fold
+configs, applies both systems to the identical OOF entities, and requires
+caller-supplied worst-fold and dispersion tolerances for a keep decision.
+`save_meta_artifact`/`load_meta_artifact` freeze the model and threshold; load
+only trusted local artifacts because joblib uses pickle. The full CPU run and
+acceptance decision remain pending.

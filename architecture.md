@@ -89,6 +89,7 @@ An optional secondary model that decides the predicted match set (zero, one, or 
 - **Evaluation:** Compare empirically:
   - Decision Policies A/B/C on leakage-safe OOF pair scores.
   - Optional entity-level meta-model only after the deterministic baseline is measured.
+- **Phase 12 cardinality rule:** A CPU-friendly three-class meta-model uses only candidate-score aggregations of OOF pair predictions. `ZERO` returns empty; `ONE` returns top-1; `MANY` returns all candidates with pair score `>= multi_pair_threshold`, falling back to top-1 if none pass. `MANY` never forces a second match. Tune the multi threshold on inner OOF entity predictions with exact macro F₀.₅; compare outer-fold meta predictions to the locked Phase 10 deterministic family on identical folds. Keep only for a cross-fitted F₀.₅ gain without a material worst-fold or dispersion loss. Inference uses the frozen model and threshold unchanged.
 - **Justification:** The meta-model is kept only if it improves cross-fitted entity-level macro F₀.₅. If deterministic rules perform equally well, the simpler approach is retained.
 
 ---

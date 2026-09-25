@@ -13,7 +13,7 @@
 - [x] Enforce schema validation (IDs must match prefix S1/S2/S3, business_name cannot be missing).
 - [x] Validate `train_ground_truth.tsv` (coverage of S1 entities, uniqueness of targets, valid IDs).
 - [ ] Analyze connected components in the training bipartite graph to inform folding.
-  - Graph analysis and metric reporting are implemented and tested on synthetic TSVs; full-training execution is deferred to Colab.
+  - Graph analysis and metric reporting are implemented and tested on synthetic TSVs; full-training execution is deferred to the user's local CPU run.
 **Metrics:** Record counts, singleton ratio, graph component sizes.
 **Acceptance Criteria:** Zero silent data drops; strict TSV compliance.
 **Next Decision:** Proceed to Phase 2.
@@ -27,7 +27,7 @@
 - [x] Implement `business_address_clean` and `business_address_alias` formatting.
 - [x] Write unit tests for idempotence, Unicode edge cases, and empty strings.
 - [x] Verify raw representations are fully preserved in the output struct.
-  - Collision-rate calculation is implemented; dataset-wide rates and timing are deferred to Colab.
+  - Collision-rate calculation is implemented; dataset-wide rates and timing are deferred to the local CPU run.
 **Metrics:** Collision rate per view; execution time.
 **Acceptance Criteria:** Tests pass, raw data preserved, multi-view available.
 **Next Decision:** Proceed to Phase 3.
@@ -39,7 +39,7 @@
 - [x] Implement Character TF-IDF Name and Character TF-IDF Address KNN.
 - [x] Implement Rare-token retrieval index.
 - [x] Union candidates, deduplicate, and record provenance per channel.
-  - Per-channel counts and bounded generation are tested on synthetic records; full-training candidate volumes are deferred to Colab.
+  - Per-channel counts and bounded generation are tested on synthetic records; full-training candidate volumes are deferred to the local CPU run.
 **Metrics:** Candidate volume per channel.
 **Acceptance Criteria:** Base channels retrieve candidates without exploding memory.
 **Next Decision:** Proceed to Phase 4.
@@ -52,7 +52,7 @@
 - [x] Implement retrieval diversity, incremental unions, and **Unique GT Recovered** per channel.
 - [x] Implement **Retrieval miss rate** = `(GT pairs absent from candidate set) / (all GT pairs)`.
 - [x] Implement reproducible sampling and taxonomy for up to 1000 genuine retrieval misses.
-- [ ] Execute the full-training benchmark in Colab, produce the quantitative report, and make the measured lexical/Word TF-IDF/Dense decision.
+- [ ] Execute the full-training benchmark on the user's CPU, produce the quantitative report, and make the measured lexical/Word TF-IDF/Dense decision.
 - [ ] After Phases 7/8, calculate ranking failures from OOF LightGBM scores, including top-1, Recall@5/10, and false-positive competition; no Phase 4 ranking rate is claimed.
 **Metrics:** Oracle F₀.₅, Unique GT Recovered per channel, Retrieval Miss Rate; post-Phase-8 OOF Ranking Failure Rate.
 **Acceptance Criteria:** Explicit quantitative error metric report produced.
@@ -77,7 +77,7 @@
 - [x] Implement token overlap, TF-IDF cosine, and numeric address overlap.
 - [x] Implement interaction features (country flags, missingness context).
 - [x] Append retrieval provenance (ranks, scores, channel counts).
-  - Feature functions and the Phase 3→6 interface are tested on synthetic pairs. Full-data feature generation and build-time measurement are deferred to Colab after retrieval-channel selection.
+  - Feature functions and the Phase 3→6 interface are tested on synthetic pairs. Full-data feature generation and build-time measurement are deferred to the local CPU run after retrieval-channel selection.
 **Metrics:** Feature build time, NaN/Infinity assertions.
 **Acceptance Criteria:** Features are pure functions of candidate pairs without fold leakage.
 **Next Decision:** Proceed to Phase 7.
@@ -88,7 +88,7 @@
 - [x] Implement cross-validation folds using connected components from Phase 1.
 - [x] Implement deterministic LightGBM pair-scorer training for one component-disjoint fold.
 - [x] Implement pair-level precision/recall/AUC diagnostics (not entity metrics).
-- [ ] Fit on the full training candidates and inspect memory use and learning curves in Colab.
+- [ ] Fit on the full training candidates and inspect memory use and learning curves on the user's CPU.
 **Acceptance Criteria:** Model fits within memory constraints, stable learning curves.
 **Next Decision:** Proceed to Phase 8.
 
@@ -98,7 +98,7 @@
 - [x] Implement component-disjoint OOF raw LightGBM pair predictions.
 - [x] Implement nested cross-fitted isotonic calibration without held-out-label reuse.
 - [x] Implement label-free OOF score artifact and multi-positive-aware ranking diagnostics.
-- [ ] Run full-training OOF predictions and report pair F₀.₅ and retrieved-pair ranking failure/Recall@5/10 in Colab.
+- [ ] Run full-training OOF predictions and report pair F₀.₅ and retrieved-pair ranking failure/Recall@5/10 on the user's CPU.
 **Metrics:** OOF Pair F₀.₅.
 **Acceptance Criteria:** No entity crosses fold boundaries during generation.
 **Next Decision:** Proceed to Phase 9.
@@ -110,7 +110,7 @@
 - [x] Implement exact macro F₀.₅, including empty-list singleton scoring.
 - [x] Define Phase 10 inputs: top-1 entity confidence, top-2 score/gap, zero-candidate state, and all candidate pair scores; preserve multi-positive truth for exact set scoring. The deterministic rule uses `<` for entity rejection and `>=` for gap/pair acceptance.
 - [x] Implement same-threshold Raw-vs-Calibrated OOF macro F₀.₅ comparison.
-- [ ] Run the full OOF entity comparison in Colab; keep calibration only if measured macro F₀.₅ or threshold stability improves.
+- [ ] Run the full OOF entity comparison on the user's CPU; keep calibration only if measured macro F₀.₅ or threshold stability improves.
 **Decision Gate:** Keep Isotonic Calibration ONLY if it improves Entity F₀.₅ or threshold stability.
 
 ## Phase 10: Threshold Optimization & Robust Policy Selection
@@ -120,7 +120,7 @@
 - [x] Implement comparison baselines A (pair threshold only) and B (entity gate + pair threshold + top-1 fallback), separate from C. Independently configure all three thresholds and serialize the frozen policy.
 - [x] Implement OOF-only joint threshold search and cross-fitted fold evaluation with exact entity F₀.₅; report overall, fold-wise, mean/std/worst, singleton precision/false-positive singleton rate, average predicted count, and empty/top-1/multi percentages. Select C only if its heldout F₀.₅ and worst-fold robustness justify it.
 - [x] Implement threshold sensitivity (caller-supplied ± perturbation) and leave-one-country-out diagnostics; use synthetic tests locally.
-- [ ] Run the full OOF search, robustness diagnostics, and frozen configuration/report generation in Colab. The all-OOF frozen-threshold fit is exploratory, distinct from cross-fitted model-selection metrics.
+- [ ] Run the full OOF search, robustness diagnostics, and frozen configuration/report generation on the user's CPU. The all-OOF frozen-threshold fit is exploratory, distinct from cross-fitted model-selection metrics.
 - [ ] If country shift causes meaningful degradation, execute threshold remediation rule:
   - Check if degradation is driven by threshold policy.
   - Evaluate one global threshold, country/source-specific thresholds (only if labeled evidence supports), and a conservative OOF-stable global threshold (only if validation confirms better worst-case robustness). These geographic variants are not decision Policies A/B/C.
@@ -135,19 +135,18 @@
 - [x] Implement nested mining: for each outer heldout fold, fit inner models only on other folds; select high-scoring known negatives from inner OOF scores, capped per S1 with deterministic ties. The mining cutoff is an explicit training-only experiment setting, never fitted from the heldout fold or test data.
 - [x] Implement weighted retraining of the outer LightGBM scorer on those mined training negatives and emit raw OOF scores, fold diagnostics, and mined-row audit indices. Use fixed boosting rounds; heldout labels influence diagnostics only.
 - [x] Implement an identical-grid raw OOF baseline-vs-mined Phase 9/10 comparison hook; synthetic tests verify outer-label isolation and cross-fitted entity F₀.₅ comparison.
-- [ ] In Colab, run the full mined OOF experiment and mandatory Phase 8 → 9 → 10 re-evaluation. If calibration is retained, regenerate its nested OOF pathway before any acceptance decision; do not reuse the old calibrator.
+- [ ] On the user's CPU, run the full mined OOF experiment and mandatory Phase 8 → 9 → 10 re-evaluation. If calibration is retained, regenerate its nested OOF pathway before any acceptance decision; do not reuse the old calibrator.
 **Decision Gate:** Keep if FINAL cross-fitted entity-level F₀.₅ improves.
 
 ## Phase 12: Entity-Level Decision / Meta Model
 
 **Objective:** Predict the final set decision (zero, one, many) using complete candidate distributions.
-- [ ] Train a meta-model on OOF entity meta-features (score gap, max score, candidate count, distribution stats).
-- [ ] Compare empirically:
-  A. Pair score + deterministic threshold
-  B. Pair score + top-1 / score-gap logic
-  C. Pair score + entity-level meta-model
-- [ ] **MANDATORY RE-EVALUATION:** Re-run Phase 10 (Thresholds) on meta-model output.
-**Decision Gate:** Keep meta-model ONLY if Option C improves cross-fitted entity F₀.₅ over deterministic logic.
+- [x] Implement a CPU logistic three-class meta-model on OOF pair-score entity aggregations (max/second/gap/count/distribution); no truth or fold labels enter features. Cross-fit classifier and inner OOF threshold selection.
+- [x] Implement exact mapping: ZERO → empty; ONE → top-1; MANY → all pair scores `>= multi_pair_threshold`, with top-1 fallback when none pass. MANY does not force a second match.
+- [x] Tune `multi_pair_threshold` using exact entity macro F₀.₅ on inner OOF predictions; serialize the frozen model and threshold for unchanged inference.
+- [x] Implement identical-fold comparison against Phase 10's locked deterministic family, with explicit worst-fold and fold-dispersion tolerances; synthetic unit tests cover rules, leakage isolation, and serialization.
+- [ ] Run the full OOF CPU experiment, Phase 10 deterministic comparison, robustness assessment, and keep/reject decision. No project-data model run has occurred locally.
+**Decision Gate:** Keep the meta-model only if its cross-fitted entity F₀.₅ improves without a material worst-fold or dispersion regression.
 
 ## Phase 13: Dense Bi-Encoder Retrieval (Independent Conditional)
 
