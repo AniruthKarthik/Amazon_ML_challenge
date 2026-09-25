@@ -241,7 +241,7 @@ class ThresholdOptimizer:
                     (combo, cands_by_s1, ground_truth, all_s1_ids)
                     for combo in valid_combos
                 ]
-                ctx = mp.get_context("forkserver" if "forkserver" in mp.get_all_start_methods() else "fork")
+                ctx = mp.get_context("fork")
                 with ctx.Pool(processes=n_workers) as pool:
                     combo_results = pool.map(_evaluate_combo_worker, combo_args)
 

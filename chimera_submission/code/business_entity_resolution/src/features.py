@@ -386,12 +386,14 @@ class PairFeatureExtractor:
             if verbose:
                 print(f"  [Feature Extraction (Multi-Core: {n_workers} CPU cores)] Extracting features for {total_pairs} pairs across {len(chunks)} parallel chunks...")
 
-            ctx = mp.get_context("forkserver" if "forkserver" in mp.get_all_start_methods() else "fork")
-            with ctx.Pool(
-                processes=n_workers,
-                initializer=_init_feature_worker,
-                initargs=(s1_records, cand_records),
-            ) as pool:
+            ctx = mp.get_context("fork")
+            
+            # Set globals in parent so children inherit them via Copy-On-Write (COW) memory
+            global _worker_s1_records, _worker_cand_records
+            _worker_s1_records = s1_records
+            _worker_cand_records = cand_records
+
+            with ctx.Pool(processes=n_workers) as pool:
                 results_nested = pool.map(_extract_chunk_worker, chunks)
 
             features_list = [item for sublist in results_nested for item in sublist]

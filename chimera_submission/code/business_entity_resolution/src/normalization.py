@@ -200,7 +200,7 @@ class TextNormalizer:
         if verbose and len(df) >= 200:
             print(f"  [Multi-View Normalization ({n_workers} CPU cores)] Normalizing {len(df)} entities across {len(chunks)} parallel chunks...")
 
-        ctx = mp.get_context("forkserver" if "forkserver" in mp.get_all_start_methods() else "fork")
+        ctx = mp.get_context("fork")
         with ctx.Pool(processes=n_workers) as pool:
             norm_chunks = pool.map(_normalize_chunk_worker, chunks)
 
