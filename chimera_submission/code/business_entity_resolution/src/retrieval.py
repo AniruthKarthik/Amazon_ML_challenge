@@ -19,6 +19,11 @@ from .normalization import NormalizedRecord
 
 CHANNELS = ("exact_name", "exact_core", "char_name", "char_address", "rare_token")
 
+# Phase B — optional numeric/postal blocker. Opt-in only; the default
+# CHANNELS tuple is unchanged so existing artifacts and tests are stable.
+NUMERIC_CHANNEL = "numeric"
+OPTIONAL_CHANNELS = (NUMERIC_CHANNEL,)
+
 
 @dataclass(frozen=True)
 class RetrievalConfig:
@@ -28,6 +33,11 @@ class RetrievalConfig:
     max_features: int = 1_000_000
     max_token_df: int = 1_000
     char_ngram_range: tuple[int, int] = (2, 4)
+    # Phase B (opt-in, defaults preserve legacy behavior):
+    # numeric_top_k enables the digit-token blocker when set; cap_sweep
+    # records per-cap candidate counts without changing retrieval ranking.
+    numeric_top_k: int | None = None
+    sweep_caps: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         if min(self.top_k, self.max_candidates, self.query_batch_size,
@@ -36,6 +46,12 @@ class RetrievalConfig:
         low, high = self.char_ngram_range
         if low < 1 or high < low:
             raise ValueError("char_ngram_range must be positive and ordered")
+        if self.numeric_top_k is not None and self.numeric_top_k < 1:
+            raise ValueError("numeric_top_k must be positive when set")
+        if any(cap < 1 for cap in self.sweep_caps):
+            raise ValueError("sweep_caps must be positive")
+        if self.sweep_caps and tuple(sorted(self.sweep_caps)) != tuple(self.sweep_caps):
+            raise ValueError("sweep_caps must be sorted ascending")
 
 
 @dataclass(frozen=True)
@@ -134,6 +150,75 @@ class _RareTokenIndex:
         return heapq.nsmallest(top_k, pairs, key=lambda pair: (-pair[1], pair[0]))
 
 
+def _digit_tokens(text: str) -> frozenset[str]:
+    """Digit tokens from a normalized address (house/PIN fragments)."""
+    return frozenset(token for token in text.split() if any(ch.isdigit() for ch in token))
+
+
+class _NumericIndex:
+    """Opt-in digit-token blocker for transliteration-robust address recall.
+
+    Deterministic IDF-weighted overlap over digit-bearing address tokens.
+    Disabled unless RetrievalConfig.numeric_top_k is set.
+    """
+
+    def __init__(self, targets: Mapping[str, NormalizedRecord], max_token_df: int):
+        document_frequency = Counter(
+            token for record in targets.values()
+            for token in _digit_tokens(record.business_address_alias)
+        )
+        self.postings: dict[str, list[str]] = defaultdict(list)
+        self.weights: dict[str, float] = {}
+        for token, frequency in document_frequency.items():
+            if frequency <= max_token_df:
+                self.weights[token] = log((len(targets) + 1) / (frequency + 1)) + 1
+        for identifier in sorted(targets):
+            for token in _digit_tokens(targets[identifier].business_address_alias):
+                if token in self.weights:
+                    self.postings[token].append(identifier)
+
+    def query(self, text: str, top_k: int) -> list[tuple[str, float]]:
+        tokens = sorted(_digit_tokens(text) & self.weights.keys())
+        denominator = sum(self.weights[token] for token in tokens)
+        if not denominator:
+            return []
+        scores: dict[str, float] = defaultdict(float)
+        for token in tokens:
+            for identifier in self.postings[token]:
+                scores[identifier] += self.weights[token]
+        pairs = ((identifier, score / denominator) for identifier, score in scores.items())
+        return heapq.nsmallest(top_k, pairs, key=lambda pair: (-pair[1], pair[0]))
+
+
+def exact_truncation_stats(
+    targets: Mapping[str, NormalizedRecord], view: str, top_k: int,
+) -> dict[str, int | float]:
+    """Phase B audit: how often exact-hit lists exceed top_k (ID-order drop).
+
+    Returns total keys, truncated keys, truncated hits, and truncation rate.
+    No retrieval is performed; pure index-size diagnostic.
+    """
+    index = _exact_index(targets, view)
+    truncated_keys = sum(1 for ids in index.values() if len(ids) > top_k)
+    truncated_hits = sum(len(ids) - top_k for ids in index.values() if len(ids) > top_k)
+    total_hits = sum(len(ids) for ids in index.values())
+    return {
+        "keys": len(index),
+        "total_hits": total_hits,
+        "truncated_keys": truncated_keys,
+        "truncated_hits": truncated_hits,
+        "truncation_rate": (truncated_hits / total_hits) if total_hits else 0.0,
+    }
+
+
+def cap_sweep_counts(ordered_target_ids: list[str], caps: tuple[int, ...]) -> dict[int, int]:
+    """Phase B helper: retained counts at each candidate cap for one S1.
+
+    `ordered_target_ids` must already be in final union-rank order.
+    """
+    return {cap: min(len(ordered_target_ids), cap) for cap in caps}
+
+
 def generate_candidates(
     source1: Mapping[str, NormalizedRecord],
     source2: Mapping[str, NormalizedRecord],
@@ -151,6 +236,10 @@ def generate_candidates(
     char_name = _CharIndex(targets, "business_name_clean", config)
     char_address = _CharIndex(targets, "business_address_alias", config)
     rare_tokens = _RareTokenIndex(targets, config.max_token_df)
+    numeric_index = (
+        _NumericIndex(targets, config.max_token_df)
+        if config.numeric_top_k is not None else None
+    )
     source_ids = sorted(source1)
 
     for start in range(0, len(source_ids), config.query_batch_size):
@@ -172,6 +261,12 @@ def generate_candidates(
                 (CHANNELS[3], address_hits[position]),
                 (CHANNELS[4], rare_tokens.query(source.business_name_core, config.top_k)),
             )
+            if numeric_index is not None:
+                assert config.numeric_top_k is not None
+                channel_results = channel_results + (
+                    (NUMERIC_CHANNEL, numeric_index.query(
+                        source.business_address_alias, config.numeric_top_k)),
+                )
             by_target: dict[str, list[ChannelHit]] = defaultdict(list)
             for channel, hits in channel_results:
                 for rank, (target_id, score) in enumerate(hits, start=1):
