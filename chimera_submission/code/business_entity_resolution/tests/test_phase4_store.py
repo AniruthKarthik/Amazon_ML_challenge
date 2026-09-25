@@ -126,6 +126,25 @@ class Phase4StoreTests(unittest.TestCase):
         self.assertEqual(top_id, first_id)
         connection.close()
 
+    def test_rare_token_df_cutoff_and_scratch_cleanup(self):
+        path = self.root / "store.sqlite"
+        build_store(self.train, path)
+        connection = open_store(path)
+        output_path = self.root / "rare_df.int32"
+        rare_token_channel(connection, output_path,
+                           RetrievalConfig(top_k=2, max_token_df=1))
+        hits = candidate_array(output_path, 2, 2, create=False)
+        self.assertTrue(np.all(hits[0] == -1))
+        self.assertEqual(int(hits[1, 0]), 1)
+        scores = np.memmap(output_path.with_suffix(".float32"),
+                           dtype=np.float32, mode="r", shape=(2, 2))
+        self.assertEqual(float(scores[1, 0]), 1.0)
+        self.assertEqual(list(self.root.glob("rare_postings_*")), [])
+        with self.assertRaises(FileExistsError):
+            rare_token_channel(connection, output_path,
+                               RetrievalConfig(top_k=2, max_token_df=1))
+        connection.close()
+
     def test_sharded_char_channels_match_phase3_on_fixture(self):
         path = self.root / "store.sqlite"
         build_store(self.train, path)

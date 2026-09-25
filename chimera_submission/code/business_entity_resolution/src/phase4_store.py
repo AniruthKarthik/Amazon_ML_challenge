@@ -9,8 +9,9 @@ from __future__ import annotations
 import csv
 import os
 import sqlite3
-from array import array
-from collections import Counter, defaultdict
+import tempfile
+from collections import defaultdict
+from functools import lru_cache
 from math import log
 from pathlib import Path
 
@@ -173,53 +174,92 @@ def exact_channel(connection: sqlite3.Connection, view: str, path: str | Path,
 
 def rare_token_channel(connection: sqlite3.Connection, path: str | Path,
                        config: RetrievalConfig) -> None:
-    """Build the Phase 3 rare-token score and persist bounded target indices."""
+    """Build identical rare-token rankings with disk-backed target postings.
+
+    The SQLite scratch index is removed after completion; only bounded query
+    accumulators and the fixed-width target-ID array remain in process memory.
+    """
+    path = Path(path)
+    score_path = path.with_suffix(".float32")
+    if path.exists() or score_path.exists():
+        raise FileExistsError("rare-token channel output already exists")
     source_count = connection.execute("SELECT COUNT(*) FROM source1").fetchone()[0]
     target_count = connection.execute("SELECT COUNT(*) FROM targets").fetchone()[0]
-    document_frequency = Counter(
-        token for (name,) in connection.execute("SELECT name_core FROM targets ORDER BY seq")
-        for token in set(name.split())
-    )
-    weights = {
-        token: log((target_count + 1) / (frequency + 1)) + 1
-        for token, frequency in document_frequency.items()
-        if frequency <= config.max_token_df
-    }
-    del document_frequency
-    postings: dict[str, array] = defaultdict(lambda: array("i"))
-    for seq, name in connection.execute("SELECT seq, name_core FROM targets ORDER BY seq"):
-        for token in set(name.split()):
-            if token in weights:
-                postings[token].append(seq)
     max_id_bytes = connection.execute(
         "SELECT MAX(LENGTH(CAST(entity_id AS BLOB))) FROM targets"
     ).fetchone()[0]
-    target_ids = np.array(
-        [identifier.encode("utf-8") for (identifier,) in connection.execute(
-            "SELECT entity_id FROM targets ORDER BY seq")],
-        dtype=f"S{max(max_id_bytes or 1, 1)}",
+    target_ids = np.fromiter(
+        (identifier.encode("utf-8") for (identifier,) in connection.execute(
+            "SELECT entity_id FROM targets ORDER BY seq")),
+        dtype=f"S{max(max_id_bytes or 1, 1)}", count=target_count,
     )
-    output = candidate_array(path, source_count, config.top_k, create=True)
-    score_path = Path(path).with_suffix(".float32")
-    if score_path.exists():
-        raise FileExistsError(score_path)
-    output_scores = np.memmap(score_path, dtype=np.float32, mode="w+",
-                              shape=(source_count, config.top_k))
-    output_scores[:] = -np.inf
-    for seq, name in connection.execute("SELECT seq, name_core FROM source1 ORDER BY seq"):
-        tokens = sorted(set(name.split()) & weights.keys())
-        denominator = sum(weights[token] for token in tokens)
-        if not denominator:
-            continue
-        scores: dict[int, float] = defaultdict(float)
-        for token in tokens:
-            for target_seq in postings[token]:
-                scores[target_seq] += weights[token]
-        ranked = sorted(scores, key=lambda target_seq: (
-            -scores[target_seq] / denominator, target_ids[target_seq]
-        ))[:config.top_k]
-        output[seq, :len(ranked)] = ranked
-        output_scores[seq, :len(ranked)] = [scores[target_seq] / denominator
-                                           for target_seq in ranked]
-    output.flush()
-    output_scores.flush()
+    with tempfile.TemporaryDirectory(prefix="rare_postings_", dir=path.parent) as scratch:
+        postings_db = sqlite3.connect(Path(scratch) / "postings.sqlite")
+        try:
+            postings_db.execute("PRAGMA journal_mode=OFF")
+            postings_db.execute("PRAGMA synchronous=OFF")
+            postings_db.execute("PRAGMA temp_store=FILE")
+            postings_db.execute("PRAGMA cache_size=-65536")
+            postings_db.execute(
+                "CREATE TABLE postings (token TEXT NOT NULL, target_seq INTEGER NOT NULL)")
+            batch: list[tuple[str, int]] = []
+            for target_seq, name in connection.execute(
+                "SELECT seq, name_core FROM targets ORDER BY seq"):
+                batch.extend((token, target_seq) for token in set(name.split()))
+                if len(batch) >= 50_000:
+                    postings_db.executemany("INSERT INTO postings VALUES (?,?)", batch)
+                    postings_db.commit()
+                    batch.clear()
+            if batch:
+                postings_db.executemany("INSERT INTO postings VALUES (?,?)", batch)
+                postings_db.commit()
+            postings_db.execute("CREATE INDEX posting_token_seq ON postings(token,target_seq)")
+            postings_db.execute(
+                "CREATE TABLE allowed AS SELECT token, COUNT(*) AS frequency "
+                "FROM postings GROUP BY token HAVING COUNT(*)<=?",
+                (config.max_token_df,),
+            )
+            postings_db.execute("CREATE UNIQUE INDEX allowed_token ON allowed(token)")
+            postings_db.commit()
+
+            @lru_cache(maxsize=100_000)
+            def token_weight(token: str) -> float | None:
+                row = postings_db.execute(
+                    "SELECT frequency FROM allowed WHERE token=?", (token,)
+                ).fetchone()
+                return log((target_count + 1) / (row[0] + 1)) + 1 if row else None
+
+            @lru_cache(maxsize=2_048)
+            def token_postings(token: str) -> tuple[int, ...]:
+                return tuple(row[0] for row in postings_db.execute(
+                    "SELECT target_seq FROM postings WHERE token=? ORDER BY target_seq",
+                    (token,),
+                ))
+
+            output = candidate_array(path, source_count, config.top_k, create=True)
+            output_scores = np.memmap(score_path, dtype=np.float32, mode="w+",
+                                      shape=(source_count, config.top_k))
+            output_scores[:] = -np.inf
+            for seq, name in connection.execute(
+                "SELECT seq, name_core FROM source1 ORDER BY seq"):
+                weighted_tokens = [(token, token_weight(token))
+                                   for token in sorted(set(name.split()))]
+                weighted_tokens = [(token, weight) for token, weight in weighted_tokens
+                                   if weight is not None]
+                denominator = sum(weight for _, weight in weighted_tokens)
+                if not denominator:
+                    continue
+                scores: dict[int, float] = defaultdict(float)
+                for token, weight in weighted_tokens:
+                    for target_seq in token_postings(token):
+                        scores[target_seq] += weight
+                ranked = sorted(scores, key=lambda target_seq: (
+                    -scores[target_seq] / denominator, target_ids[target_seq]
+                ))[:config.top_k]
+                output[seq, :len(ranked)] = ranked
+                output_scores[seq, :len(ranked)] = [scores[target_seq] / denominator
+                                                   for target_seq in ranked]
+            output.flush()
+            output_scores.flush()
+        finally:
+            postings_db.close()
