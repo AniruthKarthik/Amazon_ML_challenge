@@ -19,6 +19,14 @@ from sklearn.preprocessing import normalize
 
 from .normalization import NormalizedRecord
 from .retrieval import CHANNELS, Candidate
+from .text_sim import (
+    COUNTRY_FEATURES,
+    V2_FEATURE_NAMES,
+    _acronym_match,
+    _containment,
+    _length_ratio,
+    strip_country_features,
+)
 
 
 FeatureRow: TypeAlias = dict[str, float]
@@ -35,6 +43,7 @@ BASE_FEATURE_NAMES = (
     "both_addresses_missing", "one_address_missing",
     "candidate_rank", "candidate_score", "channel_count",
 )
+# V2 names live in text_sim.py (stdlib-only); re-exported here for callers.
 
 
 def normalized_levenshtein(left: str, right: str) -> float:
@@ -189,16 +198,21 @@ class PairFeatureExtractor:
 
     def __init__(self, name_tfidf: TfidfCosineEncoder,
                  address_tfidf: TfidfCosineEncoder,
-                 channels: tuple[str, ...] = CHANNELS):
+                 channels: tuple[str, ...] = CHANNELS,
+                 feature_version: int = 1):
         if not channels or len(set(channels)) != len(channels):
             raise ValueError("channels must be nonempty and unique")
+        if feature_version not in (1, 2):
+            raise ValueError("feature_version must be 1 (legacy) or 2 (precision v2)")
         self.name_tfidf = name_tfidf
         self.address_tfidf = address_tfidf
         self.channels = channels
+        self.feature_version = feature_version
 
     @property
     def feature_names(self) -> tuple[str, ...]:
-        return BASE_FEATURE_NAMES + tuple(
+        base = BASE_FEATURE_NAMES + (V2_FEATURE_NAMES if self.feature_version == 2 else ())
+        return base + tuple(
             f"channel_{channel}_{field}"
             for channel in self.channels
             for field in ("present", "rank", "score")
@@ -210,6 +224,7 @@ class PairFeatureExtractor:
         channels: tuple[str, ...] = CHANNELS,
         max_features: int = 100_000,
         cache_size: int = 4096,
+        feature_version: int = 1,
     ) -> PairFeatureExtractor:
         """Fit on a repeatable, fold-appropriate unlabeled record stream."""
         name_tfidf = TfidfCosineEncoder.fit(
@@ -220,7 +235,7 @@ class PairFeatureExtractor:
             (record.business_address_alias for record in record_factory()),
             max_features=max_features, cache_size=cache_size,
         )
-        return cls(name_tfidf, address_tfidf, channels)
+        return cls(name_tfidf, address_tfidf, channels, feature_version)
 
     def features(self, source: NormalizedRecord, target: NormalizedRecord,
                  candidate: Candidate) -> FeatureRow:
@@ -277,6 +292,38 @@ class PairFeatureExtractor:
             "candidate_score": float(candidate.score),
             "channel_count": float(candidate.channel_count),
         }
+        if self.feature_version == 2:
+            core_tokens1, core_tokens2 = core1.split(), core2.split()
+            first_match = float(bool(core_tokens1 and core_tokens2)
+                                and core_tokens1[0] == core_tokens2[0])
+            last_match = float(bool(core_tokens1 and core_tokens2)
+                               and core_tokens1[-1] == core_tokens2[-1])
+            nums1 = set(_NUMBERS.findall(address1))
+            nums2 = set(_NUMBERS.findall(address2))
+            number_conflict = float(bool(nums1 and nums2) and not (nums1 & nums2))
+            first_nums1 = _NUMBERS.findall(address1)[:1]
+            first_nums2 = _NUMBERS.findall(address2)[:1]
+            first_number_match = float(bool(first_nums1 and first_nums2)
+                                       and first_nums1[0] == first_nums2[0])
+            name_sim = features["name_levenshtein"]
+            addr_sim = features["address_levenshtein"]
+            features.update({
+                "name_containment": _containment(core1, core2),
+                "name_sorted_exact": float(
+                    bool(core1) and sorted(core1.split()) == sorted(core2.split())),
+                "name_first_token_match": first_match,
+                "name_last_token_match": last_match,
+                "name_acronym_match": _acronym_match(core1, core2),
+                "name_len_ratio": _length_ratio(name1, name2),
+                "name_token_count_diff": float(abs(len(core_tokens1) - len(core_tokens2))),
+                "address_len_ratio": _length_ratio(address1, address2),
+                "address_number_conflict": number_conflict,
+                "address_first_number_match": first_number_match,
+                "is_s2_target": float(target.raw.entity_id.startswith("S2-")),
+                "strong_name_weak_address": float(name_sim >= 0.85 and addr_sim < 0.5),
+                "exact_name_number_conflict": float(
+                    features["name_exact"] == 1.0 and number_conflict == 1.0),
+            })
         for channel in self.channels:
             hit = hits.get(channel)
             features[f"channel_{channel}_present"] = float(hit is not None)
