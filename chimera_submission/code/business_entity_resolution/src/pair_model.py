@@ -68,6 +68,9 @@ class BaselineConfig:
     min_data_in_leaf: int = 20
     num_threads: int = 4
     seed: int = 42
+    # Phase F additions (defaults preserve legacy behavior exactly).
+    scale_pos_weight: float = 1.0
+    reg_lambda: float = 0.0
 
     def __post_init__(self) -> None:
         if min(self.num_boost_round, self.num_leaves,
@@ -77,6 +80,22 @@ class BaselineConfig:
             raise ValueError("early_stopping_rounds must be nonnegative")
         if not 0 < self.learning_rate <= 1:
             raise ValueError("learning_rate must be in (0, 1]")
+        if isinstance(self.scale_pos_weight, bool) or not self.scale_pos_weight > 0:
+            raise ValueError("scale_pos_weight must be positive")
+        if isinstance(self.reg_lambda, bool) or not self.reg_lambda >= 0:
+            raise ValueError("reg_lambda must be nonnegative")
+
+
+def balanced_pos_weight(labels) -> float:
+    """Phase F helper: negatives/positives ratio for scale_pos_weight sweeps."""
+    import numpy as _np
+
+    labels = _np.asarray(labels)
+    positives = int((labels == 1).sum())
+    negatives = int((labels == 0).sum())
+    if positives == 0:
+        raise ValueError("need positives to compute balanced weight")
+    return negatives / positives
 
 
 @dataclass
@@ -173,6 +192,8 @@ def train_pair_baseline(
             "deterministic": True,
             "force_col_wise": True,
             "verbosity": -1,
+            "scale_pos_weight": config.scale_pos_weight,
+            "lambda_l2": config.reg_lambda,
         },
         train_data,
         num_boost_round=config.num_boost_round,
