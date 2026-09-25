@@ -126,3 +126,11 @@ def test_end_to_end_pipeline_and_official_validator(tmp_path):
     )
 
     assert len(errors) == 0, f"Validator found errors: {errors}"
+
+    # Check model checkpoint save & load
+    ckpt_path = tmp_path / "model_checkpoint.pkl"
+    pipeline.save(ckpt_path)
+    assert ckpt_path.is_file()
+    loaded_pipe = BusinessEntityResolutionPipeline.load(ckpt_path)
+    assert loaded_pipe.is_fitted
+    assert loaded_pipe.locked_policy == pipeline.locked_policy

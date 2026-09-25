@@ -70,6 +70,11 @@ def parse_args() -> argparse.Namespace:
         default=-1,
         help="Number of CPU cores to utilize (-1 for all cores, default: -1)",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume directly from model_checkpoint.pkl if available in output directory",
+    )
     return parser.parse_args()
 
 
@@ -114,28 +119,43 @@ def main() -> int:
     out_path = Path(args.output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
-    # 1. Load Training Data
-    print("\n[Step 1/5] Loading and validating training data...")
-    print(f"  Resolved Train Path: {train_path}")
-    print(f"  Resolved Test Path:  {test_path}")
+    checkpoint_file = out_path / "model_checkpoint.pkl"
 
-    train_s1, train_s2, train_s3, gt_df = TSVLoader.load_training_split(
-        train_path, max_queries=args.max_train_queries, seed=args.seed
-    )
-    print(
-        f"  Loaded Train S1: {len(train_s1)}, S2: {len(train_s2)}, S3: {len(train_s3)}, Ground Truth: {len(gt_df)}"
-    )
+    # 1. Load Training Data (skip if resuming from checkpoint)
+    if args.resume and checkpoint_file.exists():
+        print(f"\n[Step 1/5] Skipping training data loading (resuming from checkpoint {checkpoint_file})...")
+        train_s1 = train_s2 = train_s3 = gt_df = None
+    else:
+        print("\n[Step 1/5] Loading and validating training data...")
+        print(f"  Resolved Train Path: {train_path}")
+        print(f"  Resolved Test Path:  {test_path}")
 
-    # 2. Fit Pipeline & Cross-Validate
-    print("\n[Step 2/5] Fitting pipeline, cross-fitting models & optimizing robust thresholds...")
-    config = PipelineConfig(k_folds=args.k_folds, random_seed=args.seed, n_jobs=args.n_jobs)
-    pipeline = BusinessEntityResolutionPipeline(config=config)
-    pipeline.fit(train_s1, train_s2, train_s3, gt_df)
+        train_s1, train_s2, train_s3, gt_df = TSVLoader.load_training_split(
+            train_path, max_queries=args.max_train_queries, seed=args.seed
+        )
+        print(
+            f"  Loaded Train S1: {len(train_s1)}, S2: {len(train_s2)}, S3: {len(train_s3)}, Ground Truth: {len(gt_df)}"
+        )
 
-    # Release training memory before test phase
-    del train_s1, train_s2, train_s3, gt_df
-    import gc
-    gc.collect()
+    # 2. Fit Pipeline & Cross-Validate (or load from checkpoint)
+    if args.resume and checkpoint_file.exists():
+        print(f"\n[Step 2/5] Resuming from existing checkpoint: {checkpoint_file}")
+        pipeline = BusinessEntityResolutionPipeline.load(checkpoint_file)
+        pipeline.config.n_jobs = args.n_jobs
+    else:
+        print("\n[Step 2/5] Fitting pipeline, cross-fitting models & optimizing robust thresholds...")
+        config = PipelineConfig(k_folds=args.k_folds, random_seed=args.seed, n_jobs=args.n_jobs)
+        pipeline = BusinessEntityResolutionPipeline(config=config)
+        pipeline.fit(train_s1, train_s2, train_s3, gt_df)
+
+        # Release training memory before test phase
+        del train_s1, train_s2, train_s3, gt_df
+        import gc
+        gc.collect()
+
+        # Checkpoint model and policy to disk immediately
+        pipeline.save(checkpoint_file)
+        print(f"  [Checkpoint Saved] Trained models and locked policy saved to: {checkpoint_file}")
 
     rep = pipeline.ablation_report
     print("\n  --- Cross-Validation Metrics & Locked Decision Policy ---")

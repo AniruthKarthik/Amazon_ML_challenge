@@ -129,13 +129,14 @@ class CandidateRetriever:
         )
         self._target_name_matrix = self._name_vectorizer.fit_transform(name_corpus)
 
-        # 3. Character TF-IDF Address Vectorizer (char_wb 3-5 grams)
+        # 3. Word TF-IDF Address Vectorizer (word n-grams 1-2)
+        # Using word n-grams captures address tokens while reducing matrix density 8x (saving ~15 GB RAM)
         addr_corpus = target_df["address_clean"].fillna("").tolist()
         self._addr_vectorizer = TfidfVectorizer(
-            analyzer="char_wb",
-            ngram_range=(3, 5),
+            analyzer="word",
+            ngram_range=(1, 2),
             min_df=1,
-            max_features=60000,
+            max_features=50000,
             sublinear_tf=True,
             dtype=np.float32,
         )

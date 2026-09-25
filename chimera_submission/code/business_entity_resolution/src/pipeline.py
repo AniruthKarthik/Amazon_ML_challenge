@@ -219,6 +219,34 @@ class BusinessEntityResolutionPipeline:
         self.is_fitted = True
         return self
 
+    def save(self, filepath: Path | str) -> None:
+        """Save fitted model weights, decision policy, and configuration to disk."""
+        import pickle
+        state = {
+            "config": self.config,
+            "feature_cols": self.feature_cols,
+            "pair_scorer": self.pair_scorer,
+            "locked_policy": self.locked_policy,
+            "ablation_report": self.ablation_report,
+            "is_fitted": self.is_fitted,
+        }
+        with open(filepath, "wb") as f:
+            pickle.dump(state, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    @classmethod
+    def load(cls, filepath: Path | str) -> BusinessEntityResolutionPipeline:
+        """Load fitted pipeline state from disk."""
+        import pickle
+        with open(filepath, "rb") as f:
+            state = pickle.load(f)
+        pipeline = cls(config=state["config"])
+        pipeline.feature_cols = state["feature_cols"]
+        pipeline.pair_scorer = state["pair_scorer"]
+        pipeline.locked_policy = state["locked_policy"]
+        pipeline.ablation_report = state["ablation_report"]
+        pipeline.is_fitted = state["is_fitted"]
+        return pipeline
+
     def predict(
         self,
         test_s1_df: pd.DataFrame,
