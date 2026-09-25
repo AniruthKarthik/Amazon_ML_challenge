@@ -78,15 +78,12 @@ class CandidateRetriever:
         # TF-IDF models and matrices
         self._name_vectorizer: Optional[TfidfVectorizer] = None
         self._target_name_matrix: Optional[csr_matrix] = None
-        self._target_name_matrix_t: Optional[csr_matrix] = None
 
         self._addr_vectorizer: Optional[TfidfVectorizer] = None
         self._target_addr_matrix: Optional[csr_matrix] = None
-        self._target_addr_matrix_t: Optional[csr_matrix] = None
 
         self._word_vectorizer: Optional[TfidfVectorizer] = None
         self._target_word_matrix: Optional[csr_matrix] = None
-        self._target_word_matrix_t: Optional[csr_matrix] = None
 
         self._target_ids: List[str] = []
         self._target_id_to_idx: Dict[str, int] = {}
@@ -131,7 +128,6 @@ class CandidateRetriever:
             dtype=np.float32,
         )
         self._target_name_matrix = self._name_vectorizer.fit_transform(name_corpus)
-        self._target_name_matrix_t = self._target_name_matrix.T.tocsr()
 
         # 3. Character TF-IDF Address Vectorizer (char_wb 3-5 grams)
         addr_corpus = target_df["address_clean"].fillna("").tolist()
@@ -144,27 +140,34 @@ class CandidateRetriever:
             dtype=np.float32,
         )
         self._target_addr_matrix = self._addr_vectorizer.fit_transform(addr_corpus)
-        self._target_addr_matrix_t = self._target_addr_matrix.T.tocsr()
 
-        # 4. Rare-Token Inverted Index (from name tokens)
+        # 4. Rare-Token Inverted Index (Two-Pass Memory Optimization)
+        # Pass 1: count doc frequencies without storing entity IDs (avoids gigabytes of sets)
         token_doc_counts: Dict[str, int] = defaultdict(int)
-        token_to_eids: Dict[str, Set[str]] = defaultdict(set)
-
         target_eids = target_df["entity_id"].tolist()
         target_names = (
             target_df["name_clean"].fillna("").tolist() if "name_clean" in target_df.columns else [""] * len(target_df)
         )
-        for eid, name_clean in zip(target_eids, target_names):
+        for name_clean in target_names:
             tokens = set(name_clean.split())
             for t in tokens:
                 if len(t) >= self.rare_token_min_len and not t.isdigit():
                     token_doc_counts[t] += 1
-                    token_to_eids[t].add(eid)
 
+        rare_tokens = {
+            t for t, count in token_doc_counts.items()
+            if 1 <= count <= self.rare_token_max_doc_freq
+        }
+        del token_doc_counts
+
+        # Pass 2: only record entity IDs for genuine rare tokens
         self._rare_token_index.clear()
-        for token, count in token_doc_counts.items():
-            if 1 <= count <= self.rare_token_max_doc_freq:
-                self._rare_token_index[token] = list(token_to_eids[token])
+        for eid, name_clean in zip(target_eids, target_names):
+            tokens = set(name_clean.split())
+            for t in tokens:
+                if t in rare_tokens:
+                    self._rare_token_index[t].append(eid)
+        del rare_tokens
 
         # 5. Optional Word TF-IDF Vectorizer (word n-grams 1-2)
         if self.enable_word_tfidf:
@@ -177,7 +180,6 @@ class CandidateRetriever:
                 dtype=np.float32,
             )
             self._target_word_matrix = self._word_vectorizer.fit_transform(name_corpus)
-            self._target_word_matrix_t = self._target_word_matrix.T.tocsr()
 
         self._is_fitted = True
         return self
@@ -224,7 +226,6 @@ class CandidateRetriever:
         results: Dict[str, Dict[str, CandidateProvenance]],
         vectorizer: TfidfVectorizer,
         target_matrix: csr_matrix,
-        target_matrix_t: Optional[csr_matrix],
         query_texts: List[str],
         query_s1_ids: List[str],
         min_score: float,
@@ -239,8 +240,8 @@ class CandidateRetriever:
         if total_queries == 0 or target_matrix is None:
             return
 
-        if target_matrix_t is None:
-            target_matrix_t = target_matrix.T.tocsr()
+        # target_matrix.T is a zero-copy CSC view sharing underlying arrays
+        target_matrix_t = target_matrix.T
 
         log_interval = max(batch_size * 5, 2000)
 
@@ -358,7 +359,6 @@ class CandidateRetriever:
                 results=results,
                 vectorizer=self._name_vectorizer,
                 target_matrix=self._target_name_matrix,
-                target_matrix_t=self._target_name_matrix_t,
                 query_texts=s1_names,
                 query_s1_ids=s1_ids,
                 min_score=self.min_tfidf_score,
@@ -381,7 +381,6 @@ class CandidateRetriever:
                     results=results,
                     vectorizer=self._addr_vectorizer,
                     target_matrix=self._target_addr_matrix,
-                    target_matrix_t=self._target_addr_matrix_t,
                     query_texts=query_addrs,
                     query_s1_ids=query_ids,
                     min_score=0.40,
@@ -400,7 +399,6 @@ class CandidateRetriever:
                 results=results,
                 vectorizer=self._word_vectorizer,
                 target_matrix=self._target_word_matrix,
-                target_matrix_t=self._target_word_matrix_t,
                 query_texts=s1_names,
                 query_s1_ids=s1_ids,
                 min_score=self.min_word_tfidf_score,

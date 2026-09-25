@@ -157,19 +157,27 @@ def main() -> int:
         f"  Loaded Test S1: {len(test_s1)}, S2: {len(test_s2)}, S3: {len(test_s3)}"
     )
 
-    # 4. Predict
+    # 4. Predict & Stream Directly to Output TSVs
     print("\n[Step 4/5] Executing frozen inference on test set...")
-    matching_df, candidates_df = pipeline.predict(test_s1, test_s2, test_s3)
-
-    # 5. Export Results
-    print("\n[Step 5/5] Exporting official submission TSVs...")
     matching_out = out_path / "matching_results.tsv"
     candidates_out = out_path / "candidate_pairs.tsv"
 
-    matching_df.to_csv(matching_out, sep="\t", index=False, encoding="utf-8")
-    candidates_df.to_csv(candidates_out, sep="\t", index=False, encoding="utf-8")
-    print(f"  Saved final matches to: {matching_out} ({len(matching_df)} rows)")
-    print(f"  Saved candidate pairs to: {candidates_out} ({len(candidates_df)} rows)")
+    matching_df, candidates_df = pipeline.predict(
+        test_s1,
+        test_s2,
+        test_s3,
+        matching_out=matching_out,
+        candidates_out=candidates_out,
+    )
+    del test_s1, test_s2, test_s3
+    gc.collect()
+
+    # 5. Export Results
+    print("\n[Step 5/5] Finalizing official submission TSVs...")
+    actual_matches = getattr(matching_df, "_actual_len", len(matching_df))
+    actual_candidates = getattr(candidates_df, "_actual_len", len(candidates_df))
+    print(f"  Saved final matches to: {matching_out} ({actual_matches} rows)")
+    print(f"  Saved candidate pairs to: {candidates_out} ({actual_candidates} rows)")
 
     print("\nPipeline execution completed successfully.")
     return 0
