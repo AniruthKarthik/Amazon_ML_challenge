@@ -86,6 +86,14 @@ fit only tiny synthetic matrices; full training, memory checks, and learning-
 curve review are deferred to the user's CPU run. Pair diagnostics are not retrieval,
 ranking-failure, or entity-level accuracy estimates.
 
+`src.cpu_training.train_cpu_baseline` connects the disk-backed Phase 4 candidates
+to a bounded, explicitly sized training-S1 sample. It fits fold-specific TF-IDF
+encoders, component-disjoint LightGBM OOF models, reports retrieved-pair ranking,
+searches A/B/C decision policies on OOF scores, and freezes a separate final
+model and feature extractor. This is a CPU-feasible exploratory sample; its
+metrics are not full-training estimates. No full project-data training is run
+by the repository tests.
+
 ## Phase 8: OOF scores and calibration
 
 `src.oof_predictions.generate_oof_predictions` scores each pair with a

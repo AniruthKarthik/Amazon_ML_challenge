@@ -89,6 +89,7 @@
 - [x] Implement deterministic LightGBM pair-scorer training for one component-disjoint fold.
 - [x] Implement pair-level precision/recall/AUC diagnostics (not entity metrics).
 - [ ] Fit on the full training candidates and inspect memory use and learning curves on the user's CPU.
+- [x] Implement bounded CPU baseline orchestration for an explicitly sized, fixed-seed S1 sample: component-disjoint folds, fold-specific unlabeled TF-IDF, raw OOF LightGBM scores, ranking diagnostics, OOF threshold search, and a separate final model. Synthetic integration tests pass; sampled results must not be reported as full-training estimates.
 **Acceptance Criteria:** Model fits within memory constraints, stable learning curves.
 **Next Decision:** Proceed to Phase 8.
 
