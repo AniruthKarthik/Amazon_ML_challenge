@@ -12,9 +12,28 @@ from .data_contract import BusinessRecord
 
 # Start with the legal and address abbreviations explicitly described in the
 # competition problem statement. Keep the lists local and auditable.
-LEGAL_SUFFIXES = frozenset({"corp", "corporation", "ltd", "limited"})
-LEGAL_SUFFIX_PAIRS = frozenset({("pvt", "ltd"), ("private", "limited")})
-ADDRESS_ALIASES = {"rd": "road", "st": "street"}
+# Phase C expansion: additional unambiguous legal suffixes (US/India/France)
+# and street aliases. Deliberately EXCLUDES "co" (ambiguous: company/county):
+# the "café and co" core form must be preserved per unit tests.
+LEGAL_SUFFIXES = frozenset({
+    "corp", "corporation", "ltd", "limited",
+    # Phase C additions (single trailing tokens, unambiguous legal entities).
+    "inc", "incorporated", "company", "llc", "llp", "plc",
+    "gmbh", "sarl", "sas", "eurl", "srl", "pte",
+    "pvt", "private",
+})
+LEGAL_SUFFIX_PAIRS = frozenset({
+    ("pvt", "ltd"), ("private", "limited"),
+    # Phase C additions.
+    ("pvt", "limited"), ("private", "ltd"),
+})
+ADDRESS_ALIASES = {
+    "rd": "road", "st": "street",
+    # Phase C additions (US/India common street aliases; values are never keys,
+    # preserving alias idempotence).
+    "ave": "avenue", "blvd": "boulevard", "ln": "lane", "dr": "drive",
+    "ct": "court", "pl": "place",
+}
 
 
 @dataclass(frozen=True)
