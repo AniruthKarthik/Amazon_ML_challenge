@@ -27,8 +27,9 @@ FOLDS ?= 5
 SEED ?= 42
 JOBS ?= -1
 MAX_TRAIN_QUERIES ?= 40000
+DEVICE ?= auto
 
-.PHONY: help venv install test run generate validate package clean clean-all
+.PHONY: help venv install test run generate validate package collab-prep clean clean-all
 
 help:
 	@echo "Amazon ML Challenge 2026 — Business Entity Resolution"
@@ -43,6 +44,7 @@ help:
 	@echo "  make validate   Validate generated output TSVs using official validator"
 	@echo "  make test       Run the automated pytest test suite in .venv"
 	@echo "  make package    Package submission zip archive"
+	@echo "  make collab-prep Package repository and dataset for Google Colab"
 	@echo ""
 	@echo "Cleanup targets:"
 	@echo "  make clean      Clean python caches and build artifacts"
@@ -87,7 +89,8 @@ run: $(VENV_STAMP)
 		--k-folds $(FOLDS) \
 		--seed $(SEED) \
 		--n-jobs $(JOBS) \
-		--max-train-queries $(MAX_TRAIN_QUERIES)
+		--max-train-queries $(MAX_TRAIN_QUERIES) \
+		--device $(DEVICE)
 
 validate: $(VENV_STAMP)
 	$(VENV_PYTHON) utils/validate_submission.py \
@@ -100,6 +103,22 @@ package:
 	rm -f chimera_submission.zip
 	cd chimera_submission && zip -r ../chimera_submission.zip output code Documentation_template.md -x "*__pycache__*" "*.pyc" "*.DS_Store*"
 	@echo "chimera_submission.zip ready for upload."
+
+collab-prep:
+	@echo "Packaging codebase, configs, utilities, and full dataset for Google Colab..."
+	rm -f aml_collab.zip
+	zip -r -q aml_collab.zip \
+		chimera_submission \
+		dataset \
+		utils \
+		Makefile \
+		colab_run.ipynb \
+		COLAB_GUIDE.md \
+		-x "*__pycache__*" "*.pyc" "*.DS_Store*" ".venv*" "chimera_submission/output/*"
+	@echo "======================================================================"
+	@echo "Google Colab archive created: aml_collab.zip ($$(du -h aml_collab.zip | cut -f1))"
+	@echo "Upload 'aml_collab.zip' to Google Colab and run the Colab cell."
+	@echo "======================================================================"
 
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +

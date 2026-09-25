@@ -75,11 +75,26 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Resume directly from model_checkpoint.pkl if available in output directory",
     )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="auto",
+        choices=["auto", "cpu", "cuda", "gpu"],
+        help="Device to use for training (default: auto; auto-detects CUDA / GPU on Colab)",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+    resolved_device = args.device
+    if resolved_device == "auto":
+        try:
+            import torch
+            resolved_device = "cuda" if torch.cuda.is_available() else "cpu"
+        except ImportError:
+            resolved_device = "cpu"
+
     print("=" * 70)
     print("ML Challenge 2026: Business Entity Resolution Pipeline")
     print(f"  Train Directory:    {args.train_dir}")
@@ -88,6 +103,7 @@ def main() -> int:
     print(f"  Folds:              {args.k_folds}")
     print(f"  Seed:               {args.seed}")
     print(f"  Max Train Queries:  {args.max_train_queries if args.max_train_queries > 0 else 'unlimited'}")
+    print(f"  Device:             {resolved_device.upper()} {'(NVIDIA T4 / CUDA)' if resolved_device in ['cuda', 'gpu'] else '(CPU Multi-Core)'}")
     print(f"  CPU Parallelism:    {'all available cores' if args.n_jobs == -1 else f'{args.n_jobs} cores'}")
     print("=" * 70)
 
@@ -144,7 +160,12 @@ def main() -> int:
         pipeline.config.n_jobs = args.n_jobs
     else:
         print("\n[Step 2/5] Fitting pipeline, cross-fitting models & optimizing robust thresholds...")
-        config = PipelineConfig(k_folds=args.k_folds, random_seed=args.seed, n_jobs=args.n_jobs)
+        config = PipelineConfig(
+            k_folds=args.k_folds,
+            random_seed=args.seed,
+            n_jobs=args.n_jobs,
+            device=resolved_device,
+        )
         pipeline = BusinessEntityResolutionPipeline(config=config)
         pipeline.fit(train_s1, train_s2, train_s3, gt_df)
 

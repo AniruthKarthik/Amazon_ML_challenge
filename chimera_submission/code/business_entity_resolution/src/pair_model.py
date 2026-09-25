@@ -135,7 +135,17 @@ class PairScorer:
                     )
                 callbacks.append(progress_cb)
 
-            model.fit(X_train, y_train, callbacks=callbacks)
+            try:
+                model.fit(X_train, y_train, callbacks=callbacks)
+            except Exception as e:
+                if self.lgb_params.get("device") in ["cuda", "gpu"]:
+                    if verbose:
+                        print(f"\n  [GPU Notice] LightGBM GPU error ({e}). Seamlessly falling back to multi-core CPU...")
+                    self.lgb_params["device"] = "cpu"
+                    model = lgb.LGBMClassifier(**self.lgb_params)
+                    model.fit(X_train, y_train, callbacks=callbacks)
+                else:
+                    raise e
             if verbose:
                 print(f"\r  [Training Fold {fold_idx}/{n_folds}] Completed {n_trees}/{n_trees} trees.            ")
 

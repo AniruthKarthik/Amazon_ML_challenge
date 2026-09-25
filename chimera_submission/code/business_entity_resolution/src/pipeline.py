@@ -63,6 +63,7 @@ class PipelineConfig:
     entity_threshold: float = 0.55
     gap_threshold: float = 0.15
     n_jobs: int = -1
+    device: str = "cpu"
 
 
 class BusinessEntityResolutionPipeline:
@@ -174,19 +175,21 @@ class BusinessEntityResolutionPipeline:
 
         # 5. Train LightGBM Pair Scorer with OOF Predictions (Phase 7 & 8)
         print("\n  [Stage 5/6] Cross-Fitting LightGBM Pair Models & OOF Inference...")
-        self.pair_scorer = PairScorer(
-            lgb_params={
-                "objective": "binary",
-                "metric": "binary_logloss",
-                "n_estimators": self.config.lgb_n_estimators,
-                "learning_rate": self.config.lgb_learning_rate,
-                "max_depth": self.config.lgb_max_depth,
-                "num_leaves": self.config.lgb_num_leaves,
-                "random_state": self.config.random_seed,
-                "verbose": -1,
-                "n_jobs": self.config.n_jobs,
-            }
-        )
+        lgb_params = {
+            "objective": "binary",
+            "metric": "binary_logloss",
+            "n_estimators": self.config.lgb_n_estimators,
+            "learning_rate": self.config.lgb_learning_rate,
+            "max_depth": self.config.lgb_max_depth,
+            "num_leaves": self.config.lgb_num_leaves,
+            "random_state": self.config.random_seed,
+            "verbose": -1,
+            "n_jobs": self.config.n_jobs,
+        }
+        if self.config.device in ["cuda", "gpu"]:
+            lgb_params["device"] = self.config.device
+
+        self.pair_scorer = PairScorer(lgb_params=lgb_params)
         oof_res = self.pair_scorer.train_oof(
             feats_df, self.feature_cols, fold_map=fold_map, ground_truth=ground_truth
         )
