@@ -7,6 +7,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import numpy as np
+
 from src.data_contract import DataContractError, load_source
 from src.normalization import normalize_source
 from src.phase4_char import char_channel
@@ -70,6 +72,11 @@ class Phase4StoreTests(unittest.TestCase):
         exact_channel(connection, "name_clean", exact_name_path, config)
         exact_channel(connection, "name_core", exact_core_path, config)
         rare_token_channel(connection, rare_path, config)
+        rare_scores = np.memmap(rare_path.with_suffix(".float32"), dtype=np.float32,
+                                mode="r", shape=(2, 3))
+        rare_indices = candidate_array(rare_path, 2, 3, create=False)
+        self.assertTrue(np.isfinite(rare_scores[rare_indices >= 0]).all())
+        self.assertTrue(np.isneginf(rare_scores[rare_indices < 0]).all())
         target_ids = [row[0] for row in connection.execute("SELECT entity_id FROM targets ORDER BY seq")]
         source_ids = [row[0] for row in connection.execute("SELECT entity_id FROM source1 ORDER BY seq")]
         loaded = [normalize_source(load_source(self.train / f"train_source{n}.tsv", n)) for n in (1, 2, 3)]

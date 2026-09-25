@@ -200,6 +200,12 @@ def rare_token_channel(connection: sqlite3.Connection, path: str | Path,
         dtype=f"S{max(max_id_bytes or 1, 1)}",
     )
     output = candidate_array(path, source_count, config.top_k, create=True)
+    score_path = Path(path).with_suffix(".float32")
+    if score_path.exists():
+        raise FileExistsError(score_path)
+    output_scores = np.memmap(score_path, dtype=np.float32, mode="w+",
+                              shape=(source_count, config.top_k))
+    output_scores[:] = -np.inf
     for seq, name in connection.execute("SELECT seq, name_core FROM source1 ORDER BY seq"):
         tokens = sorted(set(name.split()) & weights.keys())
         denominator = sum(weights[token] for token in tokens)
@@ -213,4 +219,7 @@ def rare_token_channel(connection: sqlite3.Connection, path: str | Path,
             -scores[target_seq] / denominator, target_ids[target_seq]
         ))[:config.top_k]
         output[seq, :len(ranked)] = ranked
+        output_scores[seq, :len(ranked)] = [scores[target_seq] / denominator
+                                           for target_seq in ranked]
     output.flush()
+    output_scores.flush()

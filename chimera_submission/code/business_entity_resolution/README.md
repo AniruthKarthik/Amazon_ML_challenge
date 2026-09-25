@@ -188,3 +188,14 @@ never point it at the existing Phase 4 work directory. The target and query
 encoding stages checkpoint after each flushed batch and can resume. Dense
 retrieval is accepted only after unique ground-truth recovery, candidate
 volume, and the full Phase 6→10 OOF entity-level impact justify its cost.
+
+## Disk-backed pipeline bridge
+
+`src.pipeline_store.build_unlabeled_store` validates test Source-1/2/3 TSVs
+into the same normalized SQLite schema as the training store, but creates no
+ground-truth table and never reads test labels. `DiskCandidateStore` reads the
+completed lexical channel arrays (and optional dense arrays) as memory maps,
+unions and caps hits with deterministic provenance, and fetches only one S1's
+target records at a time. New rare-token runs persist their actual score array;
+older Phase 4 work without it uses a documented reciprocal-rank surrogate.
+The training/prediction runner is the next implementation step.
