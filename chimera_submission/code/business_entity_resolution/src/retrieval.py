@@ -100,10 +100,18 @@ class CandidateRetriever:
         # 1. Exact clean name & core name inverted indices
         self._exact_clean_name_index.clear()
         self._exact_core_name_index.clear()
-        for idx, row in target_df.iterrows():
-            eid = row["entity_id"]
-            clean_name = row.get("name_clean", "")
-            core_name = row.get("name_core", "")
+        target_eids = target_df["entity_id"].tolist()
+        clean_names = (
+            target_df["name_clean"].fillna("").tolist()
+            if "name_clean" in target_df.columns
+            else [""] * len(target_df)
+        )
+        core_names = (
+            target_df["name_core"].fillna("").tolist()
+            if "name_core" in target_df.columns
+            else [""] * len(target_df)
+        )
+        for eid, clean_name, core_name in zip(target_eids, clean_names, core_names):
             if clean_name:
                 self._exact_clean_name_index[clean_name].append(eid)
             if core_name:
@@ -115,6 +123,7 @@ class CandidateRetriever:
             analyzer="char_wb",
             ngram_range=(3, 4),
             min_df=1,
+            max_features=80000,
             sublinear_tf=True,
             dtype=np.float32,
         )
@@ -126,6 +135,7 @@ class CandidateRetriever:
             analyzer="char_wb",
             ngram_range=(3, 5),
             min_df=1,
+            max_features=60000,
             sublinear_tf=True,
             dtype=np.float32,
         )
@@ -157,6 +167,7 @@ class CandidateRetriever:
                 analyzer="word",
                 ngram_range=(1, 2),
                 min_df=1,
+                max_features=60000,
                 sublinear_tf=True,
                 dtype=np.float32,
             )
@@ -187,35 +198,17 @@ class CandidateRetriever:
         if total_s1 == 0:
             return {}
 
-        n_workers = os.cpu_count() or 4 if n_jobs == -1 else n_jobs
-        n_workers = max(1, min(n_workers, 32))
-
-        if total_s1 < 50 or n_workers <= 1:
-            return self._retrieve_single(s1_df, verbose=verbose)
-
-        chunk_size = (total_s1 + n_workers - 1) // n_workers
-        chunks = [
-            s1_df.iloc[i : i + chunk_size].copy()
-            for i in range(0, total_s1, chunk_size)
-        ]
-
         if verbose:
             print(
-                f"  [Candidate Retrieval (Multi-Core: {n_workers} CPU cores)] Querying {total_s1} entities across {len(chunks)} parallel chunks..."
+                f"  [Candidate Retrieval] Querying {total_s1} entities across exact, rare-token, and sparse TF-IDF channels..."
             )
 
-        ctx = mp.get_context("forkserver" if "forkserver" in mp.get_all_start_methods() else "fork")
-        with ctx.Pool(processes=n_workers, initializer=_init_retriever_worker, initargs=(self,)) as pool:
-            chunk_results = pool.map(_retrieve_chunk_worker, chunks)
-
-        results: Dict[str, Dict[str, CandidateProvenance]] = {}
-        for chunk_res in chunk_results:
-            results.update(chunk_res)
+        results = self._retrieve_single(s1_df, verbose=verbose)
 
         total_candidates = sum(len(cands) for cands in results.values())
         if verbose:
             print(
-                f"  [Candidate Retrieval (Multi-Core)] Collected {total_candidates} candidate pairs across {len(results)} entities using {n_workers} CPU cores."
+                f"  [Candidate Retrieval] Collected {total_candidates} candidate pairs across {len(results)} entities."
             )
 
         return results
