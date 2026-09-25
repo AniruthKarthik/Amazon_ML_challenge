@@ -17,11 +17,11 @@ It validates two files:
   your candidates and *warns* (never fails) otherwise. When absent it is skipped
   with a warning; it is still expected in your final submission zip.
 
-Stdlib only, Python 3.8+. Run from the ``student_resource/`` directory::
+Stdlib only, Python 3.8+. Run from the repository root::
 
     python3 utils/validate_submission.py \
-        --matching output/matching_results.tsv \
-        --candidate output/candidate_pairs.tsv \
+        --matching chimera_submission/output/matching_results.tsv \
+        --candidate chimera_submission/output/candidate_pairs.tsv \
         --test-dir dataset/test
 
 Exit code 0 means the files are safe to submit; 1 means fix the listed issues
@@ -279,7 +279,7 @@ def main():
     parser.add_argument(
         "--matching",
         "-m",
-        default="output/matching_results.tsv",
+        default="chimera_submission/output/matching_results.tsv",
         help="Path to matching_results.tsv (default: %(default)s)",
     )
     parser.add_argument(
@@ -287,7 +287,7 @@ def main():
         "-c",
         default=None,
         help="Path to candidate_pairs.tsv "
-        "(default: output/candidate_pairs.tsv if it exists).",
+        "(default: chimera_submission/output/candidate_pairs.tsv if it exists).",
     )
     parser.add_argument(
         "--test-dir",
@@ -308,7 +308,9 @@ def main():
 
     # candidate_pairs.tsv is optional; default to the conventional path and let
     # validate() skip (with a warning) if the file isn't there.
-    candidate_path = args.candidate or "output/candidate_pairs.tsv"
+    candidate_path = (
+        args.candidate or "chimera_submission/output/candidate_pairs.tsv"
+    )
 
     print("ML Challenge 2026 — submission validator")
     print(f"  test dir: {args.test_dir}")

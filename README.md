@@ -130,13 +130,13 @@ appeared as a candidate signals a pipeline bug — the validator warns about it)
 
 **Validate before submitting:** a helper script `utils/validate_submission.py` (stdlib
 only, no dependencies) checks both files against every rule above so you can catch a
-rejection locally instead of spending a submission on it. Run it from this
-`student_resource/` directory:
+rejection locally instead of spending a submission on it. Run it from the
+repository root:
 
 ```bash
 python3 utils/validate_submission.py \
-    --matching output/matching_results.tsv \
-    --candidate output/candidate_pairs.tsv \
+    --matching chimera_submission/output/matching_results.tsv \
+    --candidate chimera_submission/output/candidate_pairs.tsv \
     --test-dir dataset/test
 ```
 
@@ -154,7 +154,7 @@ reviewed in detail before the final rankings are confirmed.
 Structure:
 
 ```
-<team_name>_submission.zip
+chimera_submission.zip
 ├── output/
 │   ├── matching_results.tsv        # final matches (same file you upload to the leaderboard)
 │   └── candidate_pairs.tsv         # your blocking candidate set
