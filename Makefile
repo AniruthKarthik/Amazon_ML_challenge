@@ -5,8 +5,23 @@ VENV_PIP = $(VENV_DIR)/bin/pip
 VENV_STAMP = $(VENV_DIR)/.installed_stamp
 
 REQUIREMENTS = chimera_submission/code/business_entity_resolution/requirements.txt
-TRAIN_DIR ?= dataset/train
-TEST_DIR ?= dataset/test
+
+# Auto-detect dataset layout (supports standard dataset/train as well as nested dataset/student_resource/dataset/train)
+ifeq ($(wildcard dataset/train/train_source1.tsv),)
+  ifneq ($(wildcard dataset/student_resource/dataset/train/train_source1.tsv),)
+    DEFAULT_TRAIN_DIR = dataset/student_resource/dataset/train
+    DEFAULT_TEST_DIR = dataset/student_resource/dataset/test
+  else
+    DEFAULT_TRAIN_DIR = dataset/train
+    DEFAULT_TEST_DIR = dataset/test
+  endif
+else
+  DEFAULT_TRAIN_DIR = dataset/train
+  DEFAULT_TEST_DIR = dataset/test
+endif
+
+TRAIN_DIR ?= $(DEFAULT_TRAIN_DIR)
+TEST_DIR ?= $(DEFAULT_TEST_DIR)
 OUTPUT_DIR ?= chimera_submission/output
 FOLDS ?= 5
 SEED ?= 42

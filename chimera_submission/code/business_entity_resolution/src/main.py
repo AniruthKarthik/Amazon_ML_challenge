@@ -74,11 +74,37 @@ def main() -> int:
 
     train_path = Path(args.train_dir)
     test_path = Path(args.test_dir)
+
+    # Automatically resolve path if dataset was extracted into nested structure
+    def _resolve_data_dir(base_dir: Path, probe_file: str) -> Path:
+        if (base_dir / probe_file).is_file():
+            return base_dir
+        candidates = [
+            base_dir / "train",
+            base_dir / "test",
+            base_dir / "student_resource" / "dataset" / "train",
+            base_dir / "student_resource" / "dataset" / "test",
+            Path("dataset/student_resource/dataset/train"),
+            Path("dataset/student_resource/dataset/test"),
+            Path("dataset/train"),
+            Path("dataset/test"),
+        ]
+        for c in candidates:
+            if (c / probe_file).is_file():
+                return c
+        return base_dir
+
+    train_path = _resolve_data_dir(train_path, "train_source1.tsv")
+    test_path = _resolve_data_dir(test_path, "test_source1.tsv")
+
     out_path = Path(args.output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
     # 1. Load Training Data
     print("\n[Phase 1] Loading and validating training data...")
+    print(f"  Resolved Train Path: {train_path}")
+    print(f"  Resolved Test Path:  {test_path}")
+
     s1_train_file = train_path / "train_source1.tsv"
     s2_train_file = train_path / "train_source2.tsv"
     s3_train_file = train_path / "train_source3.tsv"
