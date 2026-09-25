@@ -106,9 +106,10 @@
 ## Phase 9: Entity-Level Decision + Exact F₀.₅
 
 **Objective:** Aggregate pair scores and compute the exact competition metric.
-- [ ] Implement entity-level aggregation (max score, second max, counts, score gaps).
-- [ ] Implement exact macro F₀.₅ computation per competition rules.
-- [ ] Compare Raw LightGBM vs Isotonic Calibrated scores on final Macro F₀.₅.
+- [x] Implement entity-level score aggregation (max, second, counts, gaps, distribution).
+- [x] Implement exact macro F₀.₅, including empty-list singleton scoring.
+- [x] Implement same-threshold Raw-vs-Calibrated OOF macro F₀.₅ comparison.
+- [ ] Run the full OOF entity comparison in Colab; keep calibration only if measured macro F₀.₅ or threshold stability improves.
 **Decision Gate:** Keep Isotonic Calibration ONLY if it improves Entity F₀.₅ or threshold stability.
 
 ## Phase 10: Threshold Optimization & Robust Policy Selection

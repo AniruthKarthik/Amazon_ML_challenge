@@ -102,3 +102,13 @@ failure, retrieved-pair Recall@5/10, multi-positive entity any-hit rates, and
 false-positive competition from source-sorted raw OOF scores. Retrieval misses are counted
 separately and excluded from ranking-rate denominators. No project-data OOF
 training or ranking report has been run locally.
+
+## Phase 9: entity score and comparison
+
+`src.entity_decision.entity_f05` and `macro_f05` implement the competition's
+per-S1 macro F₀.₅ exactly, including score 1 for a correctly empty singleton.
+`summarize_entity_scores` captures max/second scores, gap, counts, spread, and
+concentration. `compare_oof_score_paths` streams source-sorted candidate rows
+and compares raw and calibrated OOF scores at the same supplied threshold,
+including entities with no candidates. It does not select calibration or a
+final threshold; those decisions require full OOF results in Colab.
