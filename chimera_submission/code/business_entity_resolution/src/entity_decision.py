@@ -224,7 +224,7 @@ class ThresholdOptimizer:
         ]
         total_combos = len(valid_combos)
         n_workers = os.cpu_count() or 4 if n_jobs == -1 else n_jobs
-        n_workers = max(1, min(n_workers, 16))
+        n_workers = max(1, min(n_workers, 32))
 
         for sc_idx, sc in enumerate(score_cols_to_check, start=1):
             _, cands_by_s1 = EntityAggregator.aggregate_entity_candidates(

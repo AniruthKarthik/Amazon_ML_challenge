@@ -81,12 +81,12 @@ class PairScorer:
         df = pairs_df.copy()
 
         # Construct ground truth binary target
-        target_labels = []
-        for _, row in df.iterrows():
-            s1 = row["source1_entity_id"]
-            cand = row["candidate_entity_id"]
-            is_match = 1.0 if cand in ground_truth.get(s1, set()) else 0.0
-            target_labels.append(is_match)
+        s1_series = df["source1_entity_id"].tolist()
+        cand_series = df["candidate_entity_id"].tolist()
+        target_labels = [
+            1.0 if cand in ground_truth.get(s1, set()) else 0.0
+            for s1, cand in zip(s1_series, cand_series)
+        ]
         df["target"] = target_labels
 
         # Assign fold ID per row based on source1_entity_id

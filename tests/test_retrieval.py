@@ -192,3 +192,40 @@ def test_retriever_word_tfidf_channel():
 
     assert "S2-100" in word_cands["S1-100"]
     assert "tfidf_word" in word_cands["S1-100"]["S2-100"].channels
+
+
+def test_retriever_multi_core_equivalence():
+    target_data = [
+        {
+            "entity_id": f"S2-{i}",
+            "business_name": f"Enterprise Acme Solution {i} Corp",
+            "business_address": f"{i * 10} Industrial Way Suite {i}",
+            "country": "India" if i % 2 == 0 else "United States",
+        }
+        for i in range(80)
+    ]
+    target_df = TextNormalizer.normalize_dataframe(pd.DataFrame(target_data))
+
+    s1_data = [
+        {
+            "entity_id": f"S1-{i}",
+            "business_name": f"Acme Enterprise Solution {i}",
+            "business_address": f"{i * 10} Industrial Way",
+            "country": "India" if i % 2 == 0 else "United States",
+        }
+        for i in range(60)
+    ]
+    s1_df = TextNormalizer.normalize_dataframe(pd.DataFrame(s1_data))
+
+    retriever = CandidateRetriever(enable_word_tfidf=True)
+    retriever.fit(target_df)
+
+    single_cands = retriever.retrieve(s1_df, verbose=False, n_jobs=1)
+    multi_cands = retriever.retrieve(s1_df, verbose=False, n_jobs=2)
+
+    assert set(single_cands.keys()) == set(multi_cands.keys())
+    for s1_id in single_cands:
+        assert set(single_cands[s1_id].keys()) == set(multi_cands[s1_id].keys())
+        for target_id in single_cands[s1_id]:
+            assert single_cands[s1_id][target_id].channels == multi_cands[s1_id][target_id].channels
+

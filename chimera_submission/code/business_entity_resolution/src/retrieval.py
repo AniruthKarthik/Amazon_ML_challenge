@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
+import multiprocessing as mp
+import os
 from typing import Dict, List, Optional, Set, Tuple
 import numpy as np
 import pandas as pd
@@ -133,9 +135,12 @@ class CandidateRetriever:
         token_doc_counts: Dict[str, int] = defaultdict(int)
         token_to_eids: Dict[str, Set[str]] = defaultdict(set)
 
-        for _, row in target_df.iterrows():
-            eid = row["entity_id"]
-            tokens = set(row.get("name_clean", "").split())
+        target_eids = target_df["entity_id"].tolist()
+        target_names = (
+            target_df["name_clean"].fillna("").tolist() if "name_clean" in target_df.columns else [""] * len(target_df)
+        )
+        for eid, name_clean in zip(target_eids, target_names):
+            tokens = set(name_clean.split())
             for t in tokens:
                 if len(t) >= self.rare_token_min_len and not t.isdigit():
                     token_doc_counts[t] += 1
@@ -160,13 +165,16 @@ class CandidateRetriever:
         self._is_fitted = True
         return self
 
-    def retrieve(self, s1_df: pd.DataFrame, verbose: bool = True) -> Dict[str, Dict[str, CandidateProvenance]]:
-        """Retrieve candidates for all S1 entities across all channels.
+    def retrieve(
+        self, s1_df: pd.DataFrame, verbose: bool = True, n_jobs: int = -1
+    ) -> Dict[str, Dict[str, CandidateProvenance]]:
+        """Retrieve candidates for all S1 entities across all channels with multi-core parallelism.
 
         Parameters
         ----------
         s1_df : pd.DataFrame with normalized S1 entities.
         verbose : whether to display live channel progress status.
+        n_jobs : number of parallel worker processes (-1 for all available cores).
 
         Returns
         -------
@@ -175,6 +183,46 @@ class CandidateRetriever:
         if not self._is_fitted:
             raise RuntimeError("CandidateRetriever must be fit before retrieval.")
 
+        total_s1 = len(s1_df)
+        if total_s1 == 0:
+            return {}
+
+        n_workers = os.cpu_count() or 4 if n_jobs == -1 else n_jobs
+        n_workers = max(1, min(n_workers, 32))
+
+        if total_s1 < 50 or n_workers <= 1:
+            return self._retrieve_single(s1_df, verbose=verbose)
+
+        chunk_size = (total_s1 + n_workers - 1) // n_workers
+        chunks = [
+            s1_df.iloc[i : i + chunk_size].copy()
+            for i in range(0, total_s1, chunk_size)
+        ]
+
+        if verbose:
+            print(
+                f"  [Candidate Retrieval (Multi-Core: {n_workers} CPU cores)] Querying {total_s1} entities across {len(chunks)} parallel chunks..."
+            )
+
+        ctx = mp.get_context("forkserver" if "forkserver" in mp.get_all_start_methods() else "fork")
+        with ctx.Pool(processes=n_workers, initializer=_init_retriever_worker, initargs=(self,)) as pool:
+            chunk_results = pool.map(_retrieve_chunk_worker, chunks)
+
+        results: Dict[str, Dict[str, CandidateProvenance]] = {}
+        for chunk_res in chunk_results:
+            results.update(chunk_res)
+
+        total_candidates = sum(len(cands) for cands in results.values())
+        if verbose:
+            print(
+                f"  [Candidate Retrieval (Multi-Core)] Collected {total_candidates} candidate pairs across {len(results)} entities using {n_workers} CPU cores."
+            )
+
+        return results
+
+    def _retrieve_single(
+        self, s1_df: pd.DataFrame, verbose: bool = False
+    ) -> Dict[str, Dict[str, CandidateProvenance]]:
         results: Dict[str, Dict[str, CandidateProvenance]] = {
             s1_id: {} for s1_id in s1_df["entity_id"]
         }
@@ -182,14 +230,20 @@ class CandidateRetriever:
         # --- Channel 1 & 2: Exact Name, Exact Core Name, and Rare Tokens ---
         total_s1 = len(s1_df)
         log_s1 = max(200, total_s1 // 20) if total_s1 > 0 else 1
-        for idx, (_, row) in enumerate(s1_df.iterrows()):
+        s1_ids_list = s1_df["entity_id"].tolist()
+        clean_names_list = (
+            s1_df["name_clean"].fillna("").tolist() if "name_clean" in s1_df.columns else [""] * total_s1
+        )
+        core_names_list = (
+            s1_df["name_core"].fillna("").tolist() if "name_core" in s1_df.columns else [""] * total_s1
+        )
+
+        for idx, (s1_id, clean_name, core_name) in enumerate(
+            zip(s1_ids_list, clean_names_list, core_names_list)
+        ):
             if verbose and ((idx + 1) % log_s1 == 0 or (idx + 1) == total_s1 or (idx + 1) <= 5):
                 pct = 100.0 * (idx + 1) / total_s1 if total_s1 > 0 else 100.0
                 print(f"\r  [Candidate Retrieval 1/4: Exact & Rare] {idx + 1}/{total_s1} entities ({pct:.1f}%)", end="", flush=True)
-
-            s1_id = row["entity_id"]
-            clean_name = row.get("name_clean", "")
-            core_name = row.get("name_core", "")
 
             # Channel 1: Exact clean name
             if clean_name and clean_name in self._exact_clean_name_index:
@@ -441,3 +495,20 @@ class CandidateRetriever:
                 "candidate_entity_ids": ",".join(target_ids) if target_ids else "",
             })
         return pd.DataFrame(rows)
+
+
+_worker_retriever: Optional[CandidateRetriever] = None
+
+
+def _init_retriever_worker(retriever: CandidateRetriever) -> None:
+    """Initialize worker process with pre-fitted retriever instance."""
+    global _worker_retriever
+    _worker_retriever = retriever
+
+
+def _retrieve_chunk_worker(chunk_df: pd.DataFrame) -> Dict[str, Dict[str, CandidateProvenance]]:
+    """Worker function executing multi-channel retrieval on a DataFrame chunk."""
+    global _worker_retriever
+    assert _worker_retriever is not None, "Worker retriever not initialized!"
+    return _worker_retriever._retrieve_single(chunk_df, verbose=False)
+

@@ -186,16 +186,19 @@ class TextNormalizer:
         return out_df
 
     @classmethod
-    def normalize_dataframe(cls, df: pd.DataFrame, n_jobs: int = -1) -> pd.DataFrame:
+    def normalize_dataframe(cls, df: pd.DataFrame, n_jobs: int = -1, verbose: bool = True) -> pd.DataFrame:
         """Add all normalized views to a DataFrame with multi-core parallelism."""
-        if len(df) < 2000 or n_jobs == 1:
+        if len(df) < 50 or n_jobs == 1:
             return cls._normalize_single(df)
 
         n_workers = os.cpu_count() or 4 if n_jobs == -1 else n_jobs
-        n_workers = max(1, min(n_workers, 16))
+        n_workers = max(1, min(n_workers, 32))
 
         chunk_size = (len(df) + n_workers - 1) // n_workers
         chunks = [df.iloc[i : i + chunk_size] for i in range(0, len(df), chunk_size)]
+
+        if verbose and len(df) >= 200:
+            print(f"  [Multi-View Normalization ({n_workers} CPU cores)] Normalizing {len(df)} entities across {len(chunks)} parallel chunks...")
 
         ctx = mp.get_context("forkserver" if "forkserver" in mp.get_all_start_methods() else "fork")
         with ctx.Pool(processes=n_workers) as pool:

@@ -25,6 +25,7 @@ TEST_DIR ?= $(DEFAULT_TEST_DIR)
 OUTPUT_DIR ?= chimera_submission/output
 FOLDS ?= 5
 SEED ?= 42
+JOBS ?= -1
 
 .PHONY: help venv install test run generate validate package clean clean-all
 
@@ -54,6 +55,7 @@ help:
 	@echo "  OUTPUT_DIR=$(OUTPUT_DIR)"
 	@echo "  FOLDS=$(FOLDS)"
 	@echo "  SEED=$(SEED)"
+	@echo "  JOBS=$(JOBS)"
 
 # Create virtual environment and install requirements
 $(VENV_DIR)/bin/activate:
@@ -81,7 +83,8 @@ run: $(VENV_STAMP)
 		--test-dir $(TEST_DIR) \
 		--output-dir $(OUTPUT_DIR) \
 		--k-folds $(FOLDS) \
-		--seed $(SEED)
+		--seed $(SEED) \
+		--n-jobs $(JOBS)
 
 validate: $(VENV_STAMP)
 	$(VENV_PYTHON) utils/validate_submission.py \

@@ -125,7 +125,7 @@ class BusinessEntityResolutionPipeline:
             max_candidates_per_entity=self.config.max_candidates_per_entity,
         )
         self.retriever.fit(target_norm)
-        candidates_raw = self.retriever.retrieve(s1_norm)
+        candidates_raw = self.retriever.retrieve(s1_norm, n_jobs=self.config.n_jobs)
         pairs_df = self.retriever.to_dataframe(candidates_raw)
 
         # 4. Feature Extraction (Phase 6)
@@ -228,7 +228,7 @@ class BusinessEntityResolutionPipeline:
             max_candidates_per_entity=self.config.max_candidates_per_entity,
         )
         test_retriever.fit(target_norm)
-        candidates_raw = test_retriever.retrieve(s1_norm)
+        candidates_raw = test_retriever.retrieve(s1_norm, n_jobs=self.config.n_jobs)
 
         # Official candidate_pairs.tsv dataframe
         candidate_pairs_df = test_retriever.to_candidate_pairs_tsv(

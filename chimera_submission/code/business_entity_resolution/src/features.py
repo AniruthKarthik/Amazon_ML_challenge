@@ -162,9 +162,10 @@ class PairFeatureExtractor:
     ) -> List[Dict[str, Any]]:
         features_list = []
         total_pairs = len(pairs_df)
+        recs = pairs_df.to_dict(orient="records")
         log_interval = max(100, total_pairs // 50) if total_pairs > 0 else 1
 
-        for idx, (_, row) in enumerate(pairs_df.iterrows()):
+        for idx, row in enumerate(recs):
             if verbose and ((idx + 1) % log_interval == 0 or (idx + 1) == total_pairs or (idx + 1) <= 5):
                 pct = (100.0 * (idx + 1) / total_pairs) if total_pairs > 0 else 100.0
                 print(f"\r  [Feature Extraction] {idx + 1}/{total_pairs} pairs ({pct:.1f}%)", end="", flush=True)
@@ -359,9 +360,9 @@ class PairFeatureExtractor:
             return pd.DataFrame()
 
         n_workers = os.cpu_count() or 4 if n_jobs == -1 else n_jobs
-        n_workers = max(1, min(n_workers, 16))
+        n_workers = max(1, min(n_workers, 32))
 
-        if total_pairs < 500 or n_workers <= 1:
+        if total_pairs < 50 or n_workers <= 1:
             features_list = cls._extract_features_list(
                 pairs_df, s1_records, cand_records, verbose=verbose
             )
