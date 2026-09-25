@@ -21,12 +21,13 @@
 ## Phase 2: Normalization
 
 **Objective:** Produce multi-view text representations safely.
-- [ ] Implement `business_name_clean`: NFKC + casefold + safe punctuation.
-- [ ] Implement `business_name_folded`: accent removal.
-- [ ] Implement `business_name_core`: legal suffix extraction.
-- [ ] Implement `business_address_clean` and `business_address_alias` formatting.
-- [ ] Write unit tests for idempotence, Unicode edge cases, and empty strings.
-- [ ] Verify raw representations are fully preserved in the output struct.
+- [x] Implement `business_name_clean`: NFKC + casefold + safe punctuation.
+- [x] Implement `business_name_folded`: accent removal.
+- [x] Implement `business_name_core`: legal suffix extraction.
+- [x] Implement `business_address_clean` and `business_address_alias` formatting.
+- [x] Write unit tests for idempotence, Unicode edge cases, and empty strings.
+- [x] Verify raw representations are fully preserved in the output struct.
+  - Collision-rate calculation is implemented; dataset-wide rates and timing remain pending under the `dataset/` restriction.
 **Metrics:** Collision rate per view; execution time.
 **Acceptance Criteria:** Tests pass, raw data preserved, multi-view available.
 **Next Decision:** Proceed to Phase 3.
