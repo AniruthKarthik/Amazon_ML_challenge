@@ -9,10 +9,11 @@
 ## Phase 1: Data Contract + Integrity
 
 **Objective:** Ensure strict adherence to competition data rules, schema integrity, and graph validation.
-- [ ] Implement TSV loader with `sep="\t"`, preserving NAs as empty strings.
-- [ ] Enforce schema validation (IDs must match prefix S1/S2/S3, business_name cannot be missing).
-- [ ] Validate `train_ground_truth.tsv` (coverage of S1 entities, uniqueness of targets, valid IDs).
+- [x] Implement TSV loader with `sep="\t"`, preserving NAs as empty strings.
+- [x] Enforce schema validation (IDs must match prefix S1/S2/S3, business_name cannot be missing).
+- [x] Validate `train_ground_truth.tsv` (coverage of S1 entities, uniqueness of targets, valid IDs).
 - [ ] Analyze connected components in the training bipartite graph to inform folding.
+  - Graph analysis and metric reporting are implemented and tested on synthetic TSVs; running them on training data remains pending because `dataset/` is out of scope.
 **Metrics:** Record counts, singleton ratio, graph component sizes.
 **Acceptance Criteria:** Zero silent data drops; strict TSV compliance.
 **Next Decision:** Proceed to Phase 2.
