@@ -252,40 +252,107 @@ class CandidateRetriever:
             b_ids = query_s1_ids[b_start:b_end]
 
             sub_mat = vectorizer.transform(b_texts)
-            sim_mat = sub_mat.dot(target_matrix_t)
+            
+            # ----------------------------------------------------
+            # GPU Acceleration (PyTorch) for TF-IDF Retrieval
+            # ----------------------------------------------------
+            use_gpu = False
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    use_gpu = True
+            except ImportError:
+                pass
 
-            for local_idx in range(len(b_texts)):
-                s1_id = b_ids[local_idx]
-                s = sim_mat.indptr[local_idx]
-                e = sim_mat.indptr[local_idx + 1]
-                if s == e:
-                    continue
+            if use_gpu:
+                import torch
+                device = torch.device('cuda')
+                # Move target_matrix to PyTorch sparse CSR once if not already done
+                if not hasattr(self, '_torch_target_matrices'):
+                    self._torch_target_matrices = {}
+                
+                mat_id = id(target_matrix)
+                if mat_id not in self._torch_target_matrices:
+                    # target_matrix is CSR: [N_targets, vocab_size]
+                    self._torch_target_matrices[mat_id] = torch.sparse_csr_tensor(
+                        torch.tensor(target_matrix.indptr, dtype=torch.int32, device=device),
+                        torch.tensor(target_matrix.indices, dtype=torch.int32, device=device),
+                        torch.tensor(target_matrix.data, dtype=torch.float32, device=device),
+                        size=target_matrix.shape,
+                    )
+                
+                target_torch = self._torch_target_matrices[mat_id]
+                
+                # sub_mat is small (batch_size, vocab_size) -> convert to dense on GPU
+                sub_dense_torch = torch.tensor(sub_mat.toarray(), dtype=torch.float32, device=device)
+                
+                # Compute Cosine Similarity: [N_targets, vocab_size] @ [vocab_size, batch_size] -> [N_targets, batch_size]
+                # Then transpose to get [batch_size, N_targets]
+                sim_mat_dense = torch.sparse.mm(target_torch, sub_dense_torch.t()).t()
+                
+                # Zero out scores below min_score
+                sim_mat_dense[sim_mat_dense < min_score] = 0.0
+                
+                # Get Top K directly on GPU
+                actual_k = min(top_k, sim_mat_dense.shape[1])
+                topk_scores, topk_indices = torch.topk(sim_mat_dense, k=actual_k, dim=1)
+                
+                topk_scores_cpu = topk_scores.cpu().numpy()
+                topk_indices_cpu = topk_indices.cpu().numpy()
+                
+                for local_idx in range(len(b_texts)):
+                    s1_id = b_ids[local_idx]
+                    scores = topk_scores_cpu[local_idx]
+                    indices = topk_indices_cpu[local_idx]
+                    
+                    for rank, (score, target_idx) in enumerate(zip(scores, indices), start=1):
+                        if score < min_score:
+                            break
+                        target_id = self._target_ids[target_idx]
+                        prov = self._get_or_create(results, s1_id, target_id)
+                        prov.channels.add(channel_name)
+                        prov.scores[channel_name] = float(score)
+                        prov.ranks[channel_name] = rank
 
-                scores = sim_mat.data[s:e]
-                valid_mask = scores >= min_score
-                if not np.any(valid_mask):
-                    continue
+            else:
+                # ----------------------------------------------------
+                # Original CPU Scipy Sparse Matrix Multiplication
+                # ----------------------------------------------------
+                sim_mat = sub_mat.dot(target_matrix_t)
 
-                col_indices = sim_mat.indices[s:e]
-                valid_cols = col_indices[valid_mask]
-                valid_scores = scores[valid_mask]
+                for local_idx in range(len(b_texts)):
+                    s1_id = b_ids[local_idx]
+                    s = sim_mat.indptr[local_idx]
+                    e = sim_mat.indptr[local_idx + 1]
+                    if s == e:
+                        continue
 
-                if len(valid_scores) > top_k:
-                    top_order = np.argpartition(-valid_scores, top_k)[:top_k]
-                    top_order = top_order[np.argsort(-valid_scores[top_order])]
-                else:
-                    top_order = np.argsort(-valid_scores)
+                    scores = sim_mat.data[s:e]
+                    valid_mask = scores >= min_score
+                    if not np.any(valid_mask):
+                        continue
 
-                for rank, idx in enumerate(top_order, start=1):
-                    target_id = self._target_ids[valid_cols[idx]]
-                    score = float(valid_scores[idx])
-                    prov = self._get_or_create(results, s1_id, target_id)
-                    prov.channels.add(channel_name)
-                    prov.scores[channel_name] = score
-                    prov.ranks[channel_name] = rank
+                    col_indices = sim_mat.indices[s:e]
+                    valid_cols = col_indices[valid_mask]
+                    valid_scores = scores[valid_mask]
 
+                    if len(valid_scores) > top_k:
+                        top_order = np.argpartition(-valid_scores, top_k)[:top_k]
+                        top_order = top_order[np.argsort(-valid_scores[top_order])]
+                    else:
+                        top_order = np.argsort(-valid_scores)
+
+                    for rank, idx in enumerate(top_order, start=1):
+                        target_id = self._target_ids[valid_cols[idx]]
+                        score = float(valid_scores[idx])
+                        prov = self._get_or_create(results, s1_id, target_id)
+                        prov.channels.add(channel_name)
+                        prov.scores[channel_name] = score
+                        prov.ranks[channel_name] = rank
+
+                del sim_mat
+            
             del sub_mat
-            del sim_mat
 
             if verbose and (b_end % log_interval == 0 or b_end == total_queries or b_end <= batch_size):
                 pct = 100.0 * b_end / total_queries

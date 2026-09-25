@@ -144,20 +144,14 @@ _worker_s1_records: Dict[str, Dict[str, str]] = {}
 _worker_cand_records: Dict[str, Dict[str, str]] = {}
 
 
-def _init_feature_worker(
-    s1_records: Dict[str, Dict[str, str]], cand_records: Dict[str, Dict[str, str]]
-) -> None:
-    """Initialize worker process with entity records maps once at pool startup."""
-    global _worker_s1_records, _worker_cand_records
-    _worker_s1_records = s1_records
-    _worker_cand_records = cand_records
-
-
-def _extract_chunk_worker(chunk_df: pd.DataFrame) -> List[Dict[str, Any]]:
-    """Worker function for multi-core feature extraction."""
-    global _worker_s1_records, _worker_cand_records
+def _extract_chunk_worker_windows(
+    chunk_df: pd.DataFrame, 
+    c_s1_records: Dict[str, Dict[str, str]], 
+    c_cand_records: Dict[str, Dict[str, str]]
+) -> List[Dict[str, Any]]:
+    """Worker function for multi-core feature extraction (Windows RAM-safe)."""
     return PairFeatureExtractor._extract_features_list(
-        chunk_df, _worker_s1_records, _worker_cand_records, verbose=False
+        chunk_df, c_s1_records, c_cand_records, verbose=False
     )
 
 
@@ -383,18 +377,23 @@ class PairFeatureExtractor:
                 pairs_df.iloc[i : i + chunk_size]
                 for i in range(0, total_pairs, chunk_size)
             ]
-            if verbose:
-                print(f"  [Feature Extraction (Multi-Core: {n_workers} CPU cores)] Extracting features for {total_pairs} pairs across {len(chunks)} parallel chunks...")
-
-            ctx = mp.get_context("fork")
+            ctx = mp.get_context("spawn" if os.name == "nt" else "fork")
             
-            # Set globals in parent so children inherit them via Copy-On-Write (COW) memory
-            global _worker_s1_records, _worker_cand_records
-            _worker_s1_records = s1_records
-            _worker_cand_records = cand_records
-
+            # For memory safety on Windows (spawn), we pass ONLY the required records for each chunk.
+            # This prevents serializing 2GB+ dictionaries 22 times.
+            chunk_args = []
+            for chunk_df in chunks:
+                needed_s1 = set(chunk_df["source1_entity_id"])
+                needed_cand = set(chunk_df["candidate_entity_id"])
+                
+                c_s1_records = {k: s1_records[k] for k in needed_s1 if k in s1_records}
+                c_cand_records = {k: cand_records[k] for k in needed_cand if k in cand_records}
+                
+                chunk_args.append((chunk_df, c_s1_records, c_cand_records))
+            
             with ctx.Pool(processes=n_workers) as pool:
-                results_nested = pool.map(_extract_chunk_worker, chunks)
+                # We use starmap because _extract_chunk_worker_windows will take 3 arguments
+                results_nested = pool.starmap(_extract_chunk_worker_windows, chunk_args)
 
             features_list = [item for sublist in results_nested for item in sublist]
             if verbose:

@@ -234,21 +234,17 @@ class ThresholdOptimizer:
             best_sc_f05 = -1.0
             best_sc_policy = None
 
-            if n_workers > 1 and total_combos >= 30:
-                if verbose:
-                    print(f"  [Threshold Search {sc_idx}/{len(score_cols_to_check)}: {sc}] Evaluating {total_combos} combinations across {n_workers} CPU cores...")
-                combo_args = [
-                    (combo, cands_by_s1, ground_truth, all_s1_ids)
-                    for combo in valid_combos
-                ]
-                ctx = mp.get_context("fork")
-                with ctx.Pool(processes=n_workers) as pool:
-                    combo_results = pool.map(_evaluate_combo_worker, combo_args)
+            if verbose:
+                print(f"  [Threshold Search {sc_idx}/{len(score_cols_to_check)}: {sc}] Evaluating {total_combos} combinations sequentially (memory safe)...")
+            
+            combo_results = []
+            for combo in valid_combos:
+                combo_results.append(_evaluate_combo_worker((combo, cands_by_s1, ground_truth, all_s1_ids)))
 
-                for pol, score in combo_results:
-                    if score > best_sc_f05:
-                        best_sc_f05 = score
-                        best_sc_policy = pol
+            for pol, score in combo_results:
+                if score > best_sc_f05:
+                    best_sc_f05 = score
+                    best_sc_policy = pol
 
                 if verbose:
                     print(f"\r  [Threshold Search {sc_idx}/{len(score_cols_to_check)}: {sc}] Completed {total_combos}/{total_combos} combos | Best F0.5: {best_sc_f05:.4f}")
