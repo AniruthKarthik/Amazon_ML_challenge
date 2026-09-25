@@ -1,49 +1,75 @@
-PYTHON ?= python3
+SYSTEM_PYTHON ?= python3
+VENV_DIR ?= .venv
+VENV_PYTHON = $(VENV_DIR)/bin/python
+VENV_PIP = $(VENV_DIR)/bin/pip
+VENV_STAMP = $(VENV_DIR)/.installed_stamp
+
+REQUIREMENTS = chimera_submission/code/business_entity_resolution/requirements.txt
 TRAIN_DIR ?= dataset/train
 TEST_DIR ?= dataset/test
 OUTPUT_DIR ?= chimera_submission/output
 FOLDS ?= 5
 SEED ?= 42
 
-.PHONY: help install test run generate validate package clean
+.PHONY: help venv install test run generate validate package clean clean-all
 
 help:
 	@echo "Amazon ML Challenge 2026 — Business Entity Resolution"
 	@echo ""
-	@echo "Available targets:"
+	@echo "Virtual environment targets:"
+	@echo "  make venv       Initialize .venv and install dependencies"
+	@echo "  make install    Sync dependencies into .venv"
+	@echo ""
+	@echo "Pipeline targets (automatically initializes .venv if needed):"
 	@echo "  make run        Run end-to-end pipeline and generate TSVs"
+	@echo "  make generate   Alias for 'make run'"
 	@echo "  make validate   Validate generated output TSVs using official validator"
-	@echo "  make test       Run the automated pytest test suite"
-	@echo "  make install    Install required python dependencies"
+	@echo "  make test       Run the automated pytest test suite in .venv"
 	@echo "  make package    Package submission zip archive"
-	@echo "  make clean      Clean python caches and temporary build artifacts"
+	@echo ""
+	@echo "Cleanup targets:"
+	@echo "  make clean      Clean python caches and build artifacts"
+	@echo "  make clean-all  Clean caches and remove .venv"
 	@echo ""
 	@echo "Configurable variables:"
-	@echo "  PYTHON=$(PYTHON)"
+	@echo "  SYSTEM_PYTHON=$(SYSTEM_PYTHON)"
+	@echo "  VENV_DIR=$(VENV_DIR)"
 	@echo "  TRAIN_DIR=$(TRAIN_DIR)"
 	@echo "  TEST_DIR=$(TEST_DIR)"
 	@echo "  OUTPUT_DIR=$(OUTPUT_DIR)"
 	@echo "  FOLDS=$(FOLDS)"
 	@echo "  SEED=$(SEED)"
 
-install:
-	$(PYTHON) -m pip install -r chimera_submission/code/business_entity_resolution/requirements.txt
+# Create virtual environment and install requirements
+$(VENV_DIR)/bin/activate:
+	@echo "Creating virtual environment in $(VENV_DIR)..."
+	$(SYSTEM_PYTHON) -m venv $(VENV_DIR)
+	$(VENV_PIP) install --upgrade pip
 
-test:
-	PYTHONPATH=. $(PYTHON) -m pytest tests/ -v
+$(VENV_STAMP): $(VENV_DIR)/bin/activate $(REQUIREMENTS)
+	@echo "Installing dependencies into $(VENV_DIR)..."
+	$(VENV_PIP) install -r $(REQUIREMENTS)
+	@touch $(VENV_STAMP)
+
+venv: $(VENV_STAMP)
+
+install: venv
+
+test: $(VENV_STAMP)
+	PYTHONPATH=. $(VENV_PYTHON) -m pytest tests/ -v
 
 generate: run
 
-run:
-	PYTHONPATH=. $(PYTHON) chimera_submission/code/business_entity_resolution/src/main.py \
+run: $(VENV_STAMP)
+	PYTHONPATH=. $(VENV_PYTHON) chimera_submission/code/business_entity_resolution/src/main.py \
 		--train-dir $(TRAIN_DIR) \
 		--test-dir $(TEST_DIR) \
 		--output-dir $(OUTPUT_DIR) \
 		--k-folds $(FOLDS) \
 		--seed $(SEED)
 
-validate:
-	$(PYTHON) utils/validate_submission.py \
+validate: $(VENV_STAMP)
+	$(VENV_PYTHON) utils/validate_submission.py \
 		--matching $(OUTPUT_DIR)/matching_results.tsv \
 		--candidate $(OUTPUT_DIR)/candidate_pairs.tsv \
 		--test-dir $(TEST_DIR)
@@ -58,3 +84,7 @@ clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +
 	find . -type f -name "*.pyc" -delete
 	rm -rf .pytest_cache
+
+clean-all: clean
+	@echo "Removing virtual environment $(VENV_DIR)..."
+	rm -rf $(VENV_DIR)
