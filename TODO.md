@@ -35,10 +35,11 @@
 ## Phase 3: Exact/Lexical Retrieval
 
 **Objective:** Build base candidate generation from exact and character-level channels.
-- [ ] Implement Exact Normalized Name and Exact Core Name channels.
-- [ ] Implement Character TF-IDF Name and Character TF-IDF Address KNN.
-- [ ] Implement Rare-token retrieval index.
-- [ ] Union candidates, deduplicate, and record provenance per channel.
+- [x] Implement Exact Normalized Name and Exact Core Name channels.
+- [x] Implement Character TF-IDF Name and Character TF-IDF Address KNN.
+- [x] Implement Rare-token retrieval index.
+- [x] Union candidates, deduplicate, and record provenance per channel.
+  - Per-channel counts and bounded generation are tested on synthetic records; real candidate volumes remain pending under the `dataset/` restriction.
 **Metrics:** Candidate volume per channel.
 **Acceptance Criteria:** Base channels retrieve candidates without exploding memory.
 **Next Decision:** Proceed to Phase 4.

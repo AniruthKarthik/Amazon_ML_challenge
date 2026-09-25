@@ -17,7 +17,7 @@ connected-component sizes:
 python src/data_contract.py --data-dir /path/to/train
 ```
 
-Run the synthetic contract and normalization tests from this directory:
+Run the synthetic tests from this directory after installing `requirements.txt`:
 
 ```bash
 python -B -m unittest discover -s tests -p 'test_*.py' -v
@@ -30,3 +30,12 @@ python -B -m unittest discover -s tests -p 'test_*.py' -v
 `BusinessRecord` and exposes clean, folded, and core name views plus clean and
 alias address views. `collision_rates` reports the fraction of nonempty values
 that share a view with another record.
+
+## Phase 3: lexical candidates
+
+Pass normalized S1, S2, and S3 mappings to
+`src.retrieval.generate_candidates`, optionally with a `RetrievalConfig`. The
+generator yields bounded, deduplicated candidates with per-channel ranks and
+scores. `write_candidate_artifact` writes the internal pair-level audit
+artifact; the final competition `candidate_pairs.tsv` has a different,
+per-S1 format and is produced by the later inference phase.
