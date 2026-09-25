@@ -26,7 +26,7 @@ OUTPUT_DIR ?= chimera_submission/output
 FOLDS ?= 5
 SEED ?= 42
 JOBS ?= -1
-MAX_TRAIN_QUERIES ?= 100000
+MAX_TRAIN_QUERIES ?= 40000
 
 .PHONY: help venv install test run generate validate package clean clean-all
 

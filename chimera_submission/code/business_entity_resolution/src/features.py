@@ -140,13 +140,24 @@ def extract_numbers(text: str) -> Set[str]:
     return set(_NUMERIC_PATTERN.findall(text))
 
 
-def _extract_chunk_worker(
-    args: Tuple[pd.DataFrame, Dict[str, Dict[str, str]], Dict[str, Dict[str, str]]]
-) -> List[Dict[str, Any]]:
+_worker_s1_records: Dict[str, Dict[str, str]] = {}
+_worker_cand_records: Dict[str, Dict[str, str]] = {}
+
+
+def _init_feature_worker(
+    s1_records: Dict[str, Dict[str, str]], cand_records: Dict[str, Dict[str, str]]
+) -> None:
+    """Initialize worker process with entity records maps once at pool startup."""
+    global _worker_s1_records, _worker_cand_records
+    _worker_s1_records = s1_records
+    _worker_cand_records = cand_records
+
+
+def _extract_chunk_worker(chunk_df: pd.DataFrame) -> List[Dict[str, Any]]:
     """Worker function for multi-core feature extraction."""
-    chunk_df, s1_records, cand_records = args
+    global _worker_s1_records, _worker_cand_records
     return PairFeatureExtractor._extract_features_list(
-        chunk_df, s1_records, cand_records, verbose=False
+        chunk_df, _worker_s1_records, _worker_cand_records, verbose=False
     )
 
 
@@ -360,7 +371,7 @@ class PairFeatureExtractor:
             return pd.DataFrame()
 
         n_workers = os.cpu_count() or 4 if n_jobs == -1 else n_jobs
-        n_workers = max(1, min(n_workers, 32))
+        n_workers = max(1, min(n_workers, 8))
 
         if total_pairs < 50 or n_workers <= 1:
             features_list = cls._extract_features_list(
@@ -369,14 +380,18 @@ class PairFeatureExtractor:
         else:
             chunk_size = (total_pairs + n_workers - 1) // n_workers
             chunks = [
-                (pairs_df.iloc[i : i + chunk_size], s1_records, cand_records)
+                pairs_df.iloc[i : i + chunk_size]
                 for i in range(0, total_pairs, chunk_size)
             ]
             if verbose:
                 print(f"  [Feature Extraction (Multi-Core: {n_workers} CPU cores)] Extracting features for {total_pairs} pairs across {len(chunks)} parallel chunks...")
 
             ctx = mp.get_context("forkserver" if "forkserver" in mp.get_all_start_methods() else "fork")
-            with ctx.Pool(processes=n_workers) as pool:
+            with ctx.Pool(
+                processes=n_workers,
+                initializer=_init_feature_worker,
+                initargs=(s1_records, cand_records),
+            ) as pool:
                 results_nested = pool.map(_extract_chunk_worker, chunks)
 
             features_list = [item for sublist in results_nested for item in sublist]

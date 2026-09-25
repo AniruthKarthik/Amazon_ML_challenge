@@ -127,12 +127,40 @@ class BusinessEntityResolutionPipeline:
         )
         self.retriever.fit(target_norm)
         candidates_raw = self.retriever.retrieve(s1_norm, n_jobs=self.config.n_jobs)
-        pairs_df = self.retriever.to_dataframe(candidates_raw)
+
+        # For training: retain all true ground-truth targets + top hard negative candidates
+        # This prevents generating millions of unneeded distant negatives that explode RAM.
+        training_candidates: Dict[str, Dict[str, Any]] = {}
+        for s1_id, target_map in candidates_raw.items():
+            true_targets = ground_truth.get(s1_id, set())
+            sorted_cands = sorted(
+                target_map.items(),
+                key=lambda item: (item[0] in true_targets, item[1].channel_count, item[1].max_score),
+                reverse=True,
+            )
+            kept = {}
+            neg_count = 0
+            for tid, prov in sorted_cands:
+                if tid in true_targets:
+                    kept[tid] = prov
+                elif neg_count < 8:
+                    kept[tid] = prov
+                    neg_count += 1
+            training_candidates[s1_id] = kept
+
+        pairs_df = self.retriever.to_dataframe(training_candidates)
+        del candidates_raw, training_candidates
+        import gc
+        gc.collect()
 
         # 4. Feature Extraction (Phase 6)
         print("\n  [Stage 4/6] Tabular Pair Feature Engineering...")
+        needed_target_ids = set(pairs_df["candidate_entity_id"])
+        sub_target = target_norm[target_norm["entity_id"].isin(needed_target_ids)]
         s1_records = s1_norm.set_index("entity_id").to_dict(orient="index")
-        target_records = target_norm.set_index("entity_id").to_dict(orient="index")
+        target_records = sub_target.set_index("entity_id").to_dict(orient="index")
+        del sub_target
+        gc.collect()
 
         feats_df = PairFeatureExtractor.build_features(
             pairs_df,
@@ -140,6 +168,8 @@ class BusinessEntityResolutionPipeline:
             cand_records=target_records,
             n_jobs=self.config.n_jobs,
         )
+        del s1_records, target_records
+        gc.collect()
         self.feature_cols = [c for c in feats_df.columns if c.startswith("feat_")]
 
         # 5. Train LightGBM Pair Scorer with OOF Predictions (Phase 7 & 8)

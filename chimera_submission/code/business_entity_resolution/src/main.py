@@ -61,8 +61,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-train-queries",
         type=int,
-        default=100000,
-        help="Maximum S1 training entities to use for model fitting and threshold optimization (default: 100000; set to 0 to use all)",
+        default=40000,
+        help="Maximum S1 training entities to use for model fitting and threshold optimization (default: 40000; set to 0 to use all)",
     )
     parser.add_argument(
         "--n-jobs",
