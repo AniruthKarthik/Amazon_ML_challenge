@@ -78,12 +78,15 @@ class CandidateRetriever:
         # TF-IDF models and matrices
         self._name_vectorizer: Optional[TfidfVectorizer] = None
         self._target_name_matrix: Optional[csr_matrix] = None
+        self._target_name_matrix_t: Optional[csr_matrix] = None
 
         self._addr_vectorizer: Optional[TfidfVectorizer] = None
         self._target_addr_matrix: Optional[csr_matrix] = None
+        self._target_addr_matrix_t: Optional[csr_matrix] = None
 
         self._word_vectorizer: Optional[TfidfVectorizer] = None
         self._target_word_matrix: Optional[csr_matrix] = None
+        self._target_word_matrix_t: Optional[csr_matrix] = None
 
         self._target_ids: List[str] = []
         self._target_id_to_idx: Dict[str, int] = {}
@@ -128,6 +131,7 @@ class CandidateRetriever:
             dtype=np.float32,
         )
         self._target_name_matrix = self._name_vectorizer.fit_transform(name_corpus)
+        self._target_name_matrix_t = self._target_name_matrix.T.tocsr()
 
         # 3. Character TF-IDF Address Vectorizer (char_wb 3-5 grams)
         addr_corpus = target_df["address_clean"].fillna("").tolist()
@@ -140,6 +144,7 @@ class CandidateRetriever:
             dtype=np.float32,
         )
         self._target_addr_matrix = self._addr_vectorizer.fit_transform(addr_corpus)
+        self._target_addr_matrix_t = self._target_addr_matrix.T.tocsr()
 
         # 4. Rare-Token Inverted Index (from name tokens)
         token_doc_counts: Dict[str, int] = defaultdict(int)
@@ -172,6 +177,7 @@ class CandidateRetriever:
                 dtype=np.float32,
             )
             self._target_word_matrix = self._word_vectorizer.fit_transform(name_corpus)
+            self._target_word_matrix_t = self._target_word_matrix.T.tocsr()
 
         self._is_fitted = True
         return self
@@ -212,6 +218,83 @@ class CandidateRetriever:
             )
 
         return results
+
+    def _retrieve_tfidf_channel_batched(
+        self,
+        results: Dict[str, Dict[str, CandidateProvenance]],
+        vectorizer: TfidfVectorizer,
+        target_matrix: csr_matrix,
+        target_matrix_t: Optional[csr_matrix],
+        query_texts: List[str],
+        query_s1_ids: List[str],
+        min_score: float,
+        top_k: int,
+        channel_name: str,
+        stage_desc: str,
+        batch_size: int = 200,
+        verbose: bool = True,
+    ) -> None:
+        """Execute TF-IDF KNN query in streaming memory-bounded batches to prevent OOM."""
+        total_queries = len(query_texts)
+        if total_queries == 0 or target_matrix is None:
+            return
+
+        if target_matrix_t is None:
+            target_matrix_t = target_matrix.T.tocsr()
+
+        log_interval = max(batch_size * 5, 2000)
+
+        for b_start in range(0, total_queries, batch_size):
+            b_end = min(b_start + batch_size, total_queries)
+            b_texts = query_texts[b_start:b_end]
+            b_ids = query_s1_ids[b_start:b_end]
+
+            sub_mat = vectorizer.transform(b_texts)
+            sim_mat = sub_mat.dot(target_matrix_t)
+
+            for local_idx in range(len(b_texts)):
+                s1_id = b_ids[local_idx]
+                s = sim_mat.indptr[local_idx]
+                e = sim_mat.indptr[local_idx + 1]
+                if s == e:
+                    continue
+
+                scores = sim_mat.data[s:e]
+                valid_mask = scores >= min_score
+                if not np.any(valid_mask):
+                    continue
+
+                col_indices = sim_mat.indices[s:e]
+                valid_cols = col_indices[valid_mask]
+                valid_scores = scores[valid_mask]
+
+                if len(valid_scores) > top_k:
+                    top_order = np.argpartition(-valid_scores, top_k)[:top_k]
+                    top_order = top_order[np.argsort(-valid_scores[top_order])]
+                else:
+                    top_order = np.argsort(-valid_scores)
+
+                for rank, idx in enumerate(top_order, start=1):
+                    target_id = self._target_ids[valid_cols[idx]]
+                    score = float(valid_scores[idx])
+                    prov = self._get_or_create(results, s1_id, target_id)
+                    prov.channels.add(channel_name)
+                    prov.scores[channel_name] = score
+                    prov.ranks[channel_name] = rank
+
+            del sub_mat
+            del sim_mat
+
+            if verbose and (b_end % log_interval == 0 or b_end == total_queries or b_end <= batch_size):
+                pct = 100.0 * b_end / total_queries
+                print(
+                    f"\r  [{stage_desc}] {b_end}/{total_queries} queries ({pct:.1f}%)",
+                    end="",
+                    flush=True,
+                )
+
+        if verbose and total_queries > 0:
+            print(f"\r  [{stage_desc}] Completed {total_queries}/{total_queries} queries.         ")
 
     def _retrieve_single(
         self, s1_df: pd.DataFrame, verbose: bool = False
@@ -267,149 +350,66 @@ class CandidateRetriever:
         if verbose and total_s1 > 0:
             print(f"\r  [Candidate Retrieval 1/4: Exact & Rare] Completed {total_s1}/{total_s1} entities.         ")
 
-        # --- Channel 3: Char TF-IDF Name KNN (Batched Matrix Multiplication) ---
+        # --- Channel 3: Char TF-IDF Name KNN (Streaming Batches) ---
         if self._name_vectorizer and self._target_name_matrix is not None:
             s1_names = s1_df["name_clean"].fillna("").tolist()
-            s1_name_mat = self._name_vectorizer.transform(s1_names)
-            sim_mat = s1_name_mat.dot(self._target_name_matrix.T)
-
             s1_ids = s1_df["entity_id"].tolist()
-            n_rows = sim_mat.shape[0]
-            log_knn = max(200, n_rows // 20) if n_rows > 0 else 1
-            for row_idx in range(n_rows):
-                if verbose and ((row_idx + 1) % log_knn == 0 or (row_idx + 1) == n_rows or (row_idx + 1) <= 5):
-                    pct = 100.0 * (row_idx + 1) / n_rows if n_rows > 0 else 100.0
-                    print(f"\r  [Candidate Retrieval 2/4: Char TF-IDF] {row_idx + 1}/{n_rows} queries ({pct:.1f}%)", end="", flush=True)
+            self._retrieve_tfidf_channel_batched(
+                results=results,
+                vectorizer=self._name_vectorizer,
+                target_matrix=self._target_name_matrix,
+                target_matrix_t=self._target_name_matrix_t,
+                query_texts=s1_names,
+                query_s1_ids=s1_ids,
+                min_score=self.min_tfidf_score,
+                top_k=self.top_k_name_tfidf,
+                channel_name="tfidf_name",
+                stage_desc="Candidate Retrieval 2/4: Char TF-IDF",
+                batch_size=200,
+                verbose=verbose,
+            )
 
-                s1_id = s1_ids[row_idx]
-                s = sim_mat.indptr[row_idx]
-                e = sim_mat.indptr[row_idx + 1]
-                if s == e:
-                    continue
-
-                col_indices = sim_mat.indices[s:e]
-                scores = sim_mat.data[s:e]
-
-                # Filter by min threshold
-                valid_mask = scores >= self.min_tfidf_score
-                valid_cols = col_indices[valid_mask]
-                valid_scores = scores[valid_mask]
-
-                if len(valid_scores) > 0:
-                    # Sort top K
-                    if len(valid_scores) > self.top_k_name_tfidf:
-                        top_order = np.argpartition(-valid_scores, self.top_k_name_tfidf)[
-                            : self.top_k_name_tfidf
-                        ]
-                        top_order = top_order[np.argsort(-valid_scores[top_order])]
-                    else:
-                        top_order = np.argsort(-valid_scores)
-
-                    for rank, idx in enumerate(top_order, start=1):
-                        target_id = self._target_ids[valid_cols[idx]]
-                        score = float(valid_scores[idx])
-                        prov = self._get_or_create(results, s1_id, target_id)
-                        prov.channels.add("tfidf_name")
-                        prov.scores["tfidf_name"] = score
-                        prov.ranks["tfidf_name"] = rank
-
-            if verbose and n_rows > 0:
-                print(f"\r  [Candidate Retrieval 2/4: Char TF-IDF] Completed {n_rows}/{n_rows} queries.         ")
-
-        # --- Channel 4: Char TF-IDF Address KNN ---
+        # --- Channel 4: Char TF-IDF Address KNN (Streaming Batches) ---
         if self._addr_vectorizer and self._target_addr_matrix is not None:
             s1_addrs = s1_df["address_clean"].fillna("").tolist()
-            # Only run address KNN if address is non-empty
-            non_empty_indices = [i for i, a in enumerate(s1_addrs) if a.strip()]
-            if non_empty_indices:
-                sub_addrs = [s1_addrs[i] for i in non_empty_indices]
-                s1_addr_mat = self._addr_vectorizer.transform(sub_addrs)
-                sim_addr_mat = s1_addr_mat.dot(self._target_addr_matrix.T)
-
-                n_addr = len(non_empty_indices)
-                log_addr = max(200, n_addr // 20) if n_addr > 0 else 1
-                for local_idx, orig_idx in enumerate(non_empty_indices):
-                    if verbose and ((local_idx + 1) % log_addr == 0 or (local_idx + 1) == n_addr or (local_idx + 1) <= 5):
-                        pct = 100.0 * (local_idx + 1) / n_addr
-                        print(f"\r  [Candidate Retrieval 3/4: Address TF-IDF] {local_idx + 1}/{n_addr} queries ({pct:.1f}%)", end="", flush=True)
-
-                    s1_id = s1_df["entity_id"].iloc[orig_idx]
-                    s = sim_addr_mat.indptr[local_idx]
-                    e = sim_addr_mat.indptr[local_idx + 1]
-                    if s == e:
-                        continue
-
-                    col_indices = sim_addr_mat.indices[s:e]
-                    scores = sim_addr_mat.data[s:e]
-                    valid_mask = scores >= 0.40  # higher threshold for address
-                    valid_cols = col_indices[valid_mask]
-                    valid_scores = scores[valid_mask]
-
-                    if len(valid_scores) > 0:
-                        if len(valid_scores) > self.top_k_addr_tfidf:
-                            top_order = np.argpartition(-valid_scores, self.top_k_addr_tfidf)[
-                                : self.top_k_addr_tfidf
-                            ]
-                            top_order = top_order[np.argsort(-valid_scores[top_order])]
-                        else:
-                            top_order = np.argsort(-valid_scores)
-
-                        for rank, idx in enumerate(top_order, start=1):
-                            target_id = self._target_ids[valid_cols[idx]]
-                            score = float(valid_scores[idx])
-                            prov = self._get_or_create(results, s1_id, target_id)
-                            prov.channels.add("tfidf_addr")
-                            prov.scores["tfidf_addr"] = score
-                            prov.ranks["tfidf_addr"] = rank
-
-                if verbose and n_addr > 0:
-                    print(f"\r  [Candidate Retrieval 3/4: Address TF-IDF] Completed {n_addr}/{n_addr} queries.     ")
+            s1_ids = s1_df["entity_id"].tolist()
+            valid_pairs = [(a, eid) for a, eid in zip(s1_addrs, s1_ids) if a.strip()]
+            if valid_pairs:
+                query_addrs = [p[0] for p in valid_pairs]
+                query_ids = [p[1] for p in valid_pairs]
+                self._retrieve_tfidf_channel_batched(
+                    results=results,
+                    vectorizer=self._addr_vectorizer,
+                    target_matrix=self._target_addr_matrix,
+                    target_matrix_t=self._target_addr_matrix_t,
+                    query_texts=query_addrs,
+                    query_s1_ids=query_ids,
+                    min_score=0.40,
+                    top_k=self.top_k_addr_tfidf,
+                    channel_name="tfidf_addr",
+                    stage_desc="Candidate Retrieval 3/4: Address TF-IDF",
+                    batch_size=200,
+                    verbose=verbose,
+                )
 
         # --- Channel 6: Word TF-IDF Name KNN (Conditional) ---
         if self.enable_word_tfidf and self._word_vectorizer and self._target_word_matrix is not None:
             s1_names = s1_df["name_clean"].fillna("").tolist()
-            s1_word_mat = self._word_vectorizer.transform(s1_names)
-            sim_word_mat = s1_word_mat.dot(self._target_word_matrix.T)
-
             s1_ids = s1_df["entity_id"].tolist()
-            n_word = sim_word_mat.shape[0]
-            log_word = max(200, n_word // 20) if n_word > 0 else 1
-            for row_idx in range(n_word):
-                if verbose and ((row_idx + 1) % log_word == 0 or (row_idx + 1) == n_word or (row_idx + 1) <= 5):
-                    pct = 100.0 * (row_idx + 1) / n_word if n_word > 0 else 100.0
-                    print(f"\r  [Candidate Retrieval 4/4: Word TF-IDF] {row_idx + 1}/{n_word} queries ({pct:.1f}%)", end="", flush=True)
-
-                s1_id = s1_ids[row_idx]
-                s = sim_word_mat.indptr[row_idx]
-                e = sim_word_mat.indptr[row_idx + 1]
-                if s == e:
-                    continue
-
-                col_indices = sim_word_mat.indices[s:e]
-                scores = sim_word_mat.data[s:e]
-                valid_mask = scores >= self.min_word_tfidf_score
-                valid_cols = col_indices[valid_mask]
-                valid_scores = scores[valid_mask]
-
-                if len(valid_scores) > 0:
-                    if len(valid_scores) > self.top_k_word_tfidf:
-                        top_order = np.argpartition(-valid_scores, self.top_k_word_tfidf)[
-                            : self.top_k_word_tfidf
-                        ]
-                        top_order = top_order[np.argsort(-valid_scores[top_order])]
-                    else:
-                        top_order = np.argsort(-valid_scores)
-
-                    for rank, idx in enumerate(top_order, start=1):
-                        target_id = self._target_ids[valid_cols[idx]]
-                        score = float(valid_scores[idx])
-                        prov = self._get_or_create(results, s1_id, target_id)
-                        prov.channels.add("tfidf_word")
-                        prov.scores["tfidf_word"] = score
-                        prov.ranks["tfidf_word"] = rank
-
-            if verbose and n_word > 0:
-                print(f"\r  [Candidate Retrieval 4/4: Word TF-IDF] Completed {n_word}/{n_word} queries.         ")
+            self._retrieve_tfidf_channel_batched(
+                results=results,
+                vectorizer=self._word_vectorizer,
+                target_matrix=self._target_word_matrix,
+                target_matrix_t=self._target_word_matrix_t,
+                query_texts=s1_names,
+                query_s1_ids=s1_ids,
+                min_score=self.min_word_tfidf_score,
+                top_k=self.top_k_word_tfidf,
+                channel_name="tfidf_word",
+                stage_desc="Candidate Retrieval 4/4: Word TF-IDF",
+                batch_size=200,
+                verbose=verbose,
+            )
 
         # Deduplicate and Cap Candidates per S1 entity
         for s1_id, target_map in results.items():
