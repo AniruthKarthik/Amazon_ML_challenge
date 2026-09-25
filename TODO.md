@@ -2,6 +2,7 @@
 
 > **Objective:** MAXIMIZE true held-out macro F₀.₅ accuracy at the ENTITY level, under the actual competition constraints.
 > **Critical Rule:** ANY material change to upstream components (retrieval channels, pair model, features) REQUIRES a full downstream re-optimization (regenerate OOF → rebuild meta-features → retrain meta-model → reoptimize thresholds → compute true final F₀.₅).
+> **Compute Gate Rule:** Before running a full downstream re-optimization loop (Phase 8→10) for any candidate change in Phase 11/12/13/14, first check a cheap proxy signal (pair-level AUC or OOF pair F₀.₅ on a fixed sample) against the current locked baseline. Only proceed to the full mandatory re-optimization loop if the proxy signal shows improvement above a pre-defined minimum margin. Log proxy-reject decisions in the ablation report for auditability.
 
 ---
 
@@ -156,8 +157,11 @@
 ## Phase 15: Final Ablations
 
 **Objective:** Measure and lock the optimal ensemble/configuration.
-- [ ] Evaluate final models ensuring full downstream re-optimization loops are performed for each.
-- [ ] Lock the single most robust architecture configuration based on stable OOF entity F₀.₅.
+- [ ] Compare all accepted modules (Raw vs Calibrated, Base vs Base+Word, LightGBM vs LightGBM+Meta-model).
+- [ ] Compare LightGBM against tabular ensembles (CatBoost, LR Stacker) using identical OOF folds and identical feature set.
+- [ ] Ensure full downstream re-optimization loop (Phase 8→10) is run for each candidate final model before comparison.
+- [ ] Generate comprehensive ablation report: OOF entity F₀.₅ mean, variance, worst-fold, per-country breakdown for every candidate.
+**Acceptance Criteria:** Lock the single most robust architecture configuration based on stable OOF entity F₀.₅, not just mean.
 
 ## Phase 16: Frozen Inference + Output Validation
 

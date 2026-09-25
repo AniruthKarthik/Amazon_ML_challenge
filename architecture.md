@@ -110,6 +110,7 @@ Thresholds (pair threshold, entity threshold, gap thresholds) are jointly optimi
 Leakage prevention is central to the architecture.
 - **Protocol:** Models generating upstream predictions (pair model) must not be trained on the data they predict. Entity-level features and threshold optimization are fit strictly on out-of-fold (OOF) pair predictions.
 - **Downstream Regeneration:** ANY material change to upstream components (retrieval channels, K, cap, pair model, features, hard-negatives, dense retrieval, cross-encoders) REQUIRES regenerating OOF predictions, rebuilding meta-features, retraining the meta-model, and reoptimizing thresholds to compute the true final entity F₀.₅.
+  - **Compute Gate:** Full regeneration is expensive at this candidate scale. Before triggering it, evaluate the candidate change on a cheap proxy metric (pair AUC / sampled OOF pair F₀.₅) against the current baseline. Only commit to full OOF/meta-feature/threshold regeneration if the proxy clears a pre-defined minimum improvement margin. Rejected candidates are logged, not silently dropped.
 - **Validation:** Connected-component (graph-aware) GroupKFold is mandatory.
 
 ---
@@ -142,7 +143,9 @@ Errors are systematically categorized and quantified to drive architecture decis
 ## 15. Ablation / Model Selection
 
 The final system is selected via cross-fitted entity-level macro F₀.₅. 
-- No model is added solely for complexity. The simplest architecture achieving the best validated F₀.₅ wins.
+- **Ensemble Evaluation:** Compare LightGBM against tabular ensembles (CatBoost, LR Stacker) using identical OOF folds and feature sets. Ensure full downstream re-optimization loops are executed before comparison.
+- **Reporting:** Generate a comprehensive ablation report detailing OOF entity F₀.₅ mean, variance, worst-fold, and per-country breakdown for every candidate model configuration.
+- No model is added solely for complexity. The single most robust architecture achieving the most stable validated F₀.₅ wins, not just the one with the highest mean score.
 
 ---
 
