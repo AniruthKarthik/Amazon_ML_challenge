@@ -80,18 +80,18 @@
 ## Phase 7: LightGBM Baseline
 
 **Objective:** Train primary pair scorer using structural/lexical features.
-- [ ] Define cross-validation folds using connected components from Phase 1.
-- [ ] Train LightGBM pair scorer.
-- [ ] Evaluate pair-level precision/recall/AUC (Diagnostics only).
+- [x] Define cross-validation folds using connected components from Phase 1.
+- [x] Train LightGBM pair scorer.
+- [x] Evaluate pair-level precision/recall/AUC (Diagnostics only).
 **Acceptance Criteria:** Model fits within memory constraints, stable learning curves.
 **Next Decision:** Proceed to Phase 8.
 
 ## Phase 8: OOF Pair Predictions
 
 **Objective:** Generate leakage-safe predictions to drive entity-level decisions.
-- [ ] Generate out-of-fold (OOF) predictions for all train candidates.
-- [ ] Generate OOF predictions for raw LightGBM scores.
-- [ ] Fit isotonic calibration on OOF scores and generate calibrated OOF scores.
+- [x] Generate out-of-fold (OOF) predictions for all train candidates.
+- [x] Generate OOF predictions for raw LightGBM scores.
+- [x] Fit isotonic calibration on OOF scores and generate calibrated OOF scores.
 **Metrics:** OOF Pair F₀.₅.
 **Acceptance Criteria:** No entity crosses fold boundaries during generation.
 **Next Decision:** Proceed to Phase 9.
