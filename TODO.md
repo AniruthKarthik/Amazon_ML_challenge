@@ -61,9 +61,9 @@
 ## Phase 5: Word TF-IDF Retrieval Experiment (Independent Conditional)
 
 **Objective:** Test if word-level TF-IDF recovers reordered/multi-token targets missed by char TF-IDF.
-- [ ] Implement Word TF-IDF KNN channel.
-- [ ] Measure **Unique GT Recovered** specifically against the base Char TF-IDF union.
-- [ ] Measure incremental Oracle F₀.₅ and candidate explosion.
+- [x] Implement Word TF-IDF KNN channel.
+- [x] Measure **Unique GT Recovered** specifically against the base Char TF-IDF union.
+- [x] Measure incremental Oracle F₀.₅ and candidate explosion.
 **Decision Gate:** Keep if it measurably improves Oracle F₀.₅ and Unique GT Recovered without excessive memory cost.
 
 ## Phase 6: Pair Features

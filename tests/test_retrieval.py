@@ -154,3 +154,41 @@ def test_retriever_to_candidate_pairs_tsv(sample_target_df, sample_s1_df):
     # Singleton S1-005 should have empty candidate_entity_ids
     s1_5_row = tsv_df[tsv_df["source1_entity_id"] == "S1-005"].iloc[0]
     assert s1_5_row["candidate_entity_ids"] == ""
+
+
+def test_retriever_word_tfidf_channel():
+    # Test that word TF-IDF recovers inverted/reordered multi-token names
+    target_data = [
+        {
+            "entity_id": "S2-100",
+            "business_name": "International Hospital Apollo Healthcare",
+            "business_address": "Chennai",
+            "country": "India",
+        }
+    ]
+    target_df = TextNormalizer.normalize_dataframe(pd.DataFrame(target_data))
+
+    s1_data = [
+        {
+            "entity_id": "S1-100",
+            "business_name": "Apollo International Healthcare Hospital",
+            "business_address": "Chennai",
+            "country": "India",
+        }
+    ]
+    s1_df = TextNormalizer.normalize_dataframe(pd.DataFrame(s1_data))
+
+    # Without Word TF-IDF
+    base_retriever = CandidateRetriever(enable_word_tfidf=False, min_tfidf_score=0.99)
+    base_retriever.fit(target_df)
+    base_cands = base_retriever.retrieve(s1_df)
+
+    # With Word TF-IDF
+    word_retriever = CandidateRetriever(
+        enable_word_tfidf=True, min_word_tfidf_score=0.50, min_tfidf_score=0.99
+    )
+    word_retriever.fit(target_df)
+    word_cands = word_retriever.retrieve(s1_df)
+
+    assert "S2-100" in word_cands["S1-100"]
+    assert "tfidf_word" in word_cands["S1-100"]["S2-100"].channels

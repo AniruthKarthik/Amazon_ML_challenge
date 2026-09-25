@@ -52,6 +52,9 @@ class CandidateRetriever:
         rare_token_max_doc_freq: int = 50,
         rare_token_min_len: int = 4,
         max_candidates_per_entity: int = 60,
+        enable_word_tfidf: bool = False,
+        top_k_word_tfidf: int = 15,
+        min_word_tfidf_score: float = 0.30,
     ):
         self.top_k_name_tfidf = top_k_name_tfidf
         self.top_k_addr_tfidf = top_k_addr_tfidf
@@ -59,6 +62,9 @@ class CandidateRetriever:
         self.rare_token_max_doc_freq = rare_token_max_doc_freq
         self.rare_token_min_len = rare_token_min_len
         self.max_candidates_per_entity = max_candidates_per_entity
+        self.enable_word_tfidf = enable_word_tfidf
+        self.top_k_word_tfidf = top_k_word_tfidf
+        self.min_word_tfidf_score = min_word_tfidf_score
 
         # Exact index mappings: normalized_text -> list of target_ids
         self._exact_clean_name_index: Dict[str, List[str]] = defaultdict(list)
@@ -73,6 +79,9 @@ class CandidateRetriever:
 
         self._addr_vectorizer: Optional[TfidfVectorizer] = None
         self._target_addr_matrix: Optional[csr_matrix] = None
+
+        self._word_vectorizer: Optional[TfidfVectorizer] = None
+        self._target_word_matrix: Optional[csr_matrix] = None
 
         self._target_ids: List[str] = []
         self._target_id_to_idx: Dict[str, int] = {}
@@ -136,6 +145,17 @@ class CandidateRetriever:
         for token, count in token_doc_counts.items():
             if 1 <= count <= self.rare_token_max_doc_freq:
                 self._rare_token_index[token] = list(token_to_eids[token])
+
+        # 5. Optional Word TF-IDF Vectorizer (word n-grams 1-2)
+        if self.enable_word_tfidf:
+            self._word_vectorizer = TfidfVectorizer(
+                analyzer="word",
+                ngram_range=(1, 2),
+                min_df=1,
+                sublinear_tf=True,
+                dtype=np.float32,
+            )
+            self._target_word_matrix = self._word_vectorizer.fit_transform(name_corpus)
 
         self._is_fitted = True
         return self
@@ -264,6 +284,42 @@ class CandidateRetriever:
                             prov.scores["tfidf_addr"] = score
                             prov.ranks["tfidf_addr"] = rank
 
+        # --- Channel 6: Word TF-IDF Name KNN (Conditional) ---
+        if self.enable_word_tfidf and self._word_vectorizer and self._target_word_matrix is not None:
+            s1_names = s1_df["name_clean"].fillna("").tolist()
+            s1_word_mat = self._word_vectorizer.transform(s1_names)
+            sim_word_mat = s1_word_mat.dot(self._target_word_matrix.T)
+
+            s1_ids = s1_df["entity_id"].tolist()
+            for row_idx in range(sim_word_mat.shape[0]):
+                s1_id = s1_ids[row_idx]
+                row_sim = sim_word_mat.getrow(row_idx)
+                if row_sim.nnz == 0:
+                    continue
+
+                col_indices = row_sim.indices
+                scores = row_sim.data
+                valid_mask = scores >= self.min_word_tfidf_score
+                valid_cols = col_indices[valid_mask]
+                valid_scores = scores[valid_mask]
+
+                if len(valid_scores) > 0:
+                    if len(valid_scores) > self.top_k_word_tfidf:
+                        top_order = np.argpartition(-valid_scores, self.top_k_word_tfidf)[
+                            : self.top_k_word_tfidf
+                        ]
+                        top_order = top_order[np.argsort(-valid_scores[top_order])]
+                    else:
+                        top_order = np.argsort(-valid_scores)
+
+                    for rank, idx in enumerate(top_order, start=1):
+                        target_id = self._target_ids[valid_cols[idx]]
+                        score = float(valid_scores[idx])
+                        prov = self._get_or_create(results, s1_id, target_id)
+                        prov.channels.add("tfidf_word")
+                        prov.scores["tfidf_word"] = score
+                        prov.ranks["tfidf_word"] = rank
+
         # Deduplicate and Cap Candidates per S1 entity
         for s1_id, target_map in results.items():
             if len(target_map) > self.max_candidates_per_entity:
@@ -311,6 +367,7 @@ class CandidateRetriever:
                     "score_exact_name": prov.scores.get("exact_name", 0.0),
                     "score_exact_core": prov.scores.get("exact_core", 0.0),
                     "score_tfidf_name": prov.scores.get("tfidf_name", 0.0),
+                    "score_tfidf_word": prov.scores.get("tfidf_word", 0.0),
                     "score_tfidf_addr": prov.scores.get("tfidf_addr", 0.0),
                     "score_rare_token": prov.scores.get("rare_token", 0.0),
                 })
@@ -318,7 +375,7 @@ class CandidateRetriever:
             return pd.DataFrame(columns=[
                 "source1_entity_id", "candidate_entity_id", "channels", "channel_count",
                 "max_score", "min_rank", "score_exact_name", "score_exact_core",
-                "score_tfidf_name", "score_tfidf_addr", "score_rare_token",
+                "score_tfidf_name", "score_tfidf_word", "score_tfidf_addr", "score_rare_token",
             ])
         return pd.DataFrame(rows)
 
