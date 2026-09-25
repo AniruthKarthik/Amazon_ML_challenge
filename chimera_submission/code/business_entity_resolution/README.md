@@ -169,3 +169,22 @@ caller-supplied worst-fold and dispersion tolerances for a keep decision.
 `save_meta_artifact`/`load_meta_artifact` freeze the model and threshold; load
 only trusted local artifacts because joblib uses pickle. The full CPU run and
 acceptance decision remain pending.
+
+## Phase 13: optional dense retrieval on a 16 GB CPU laptop
+
+This branch is **off by default**. The 384-dimensional multilingual MiniLM
+encoder is listed as Apache-2.0 and about 0.1B parameters on its
+[model card](https://huggingface.co/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2).
+Install `requirements-dense.txt` only if the Phase 4 miss taxonomy indicates a
+semantic/linguistic retrieval bottleneck. The [Faiss IVF-PQ index](https://github.com/facebookresearch/faiss/wiki/Faiss-indexes)
+compresses target vectors; target embeddings are streamed to a float16 file on
+disk instead of held in memory. For roughly 10.3 million targets, that file
+alone needs about 7.4 GiB of disk space, and encoding may take substantial CPU
+time. A pinned encoder commit revision is required for reproducibility.
+
+`python -m src.dense_retrieval --help` lists independent `encode`, `index`,
+`query`, and train-only `evaluate` stages. Use a separate dense work directory;
+never point it at the existing Phase 4 work directory. The target and query
+encoding stages checkpoint after each flushed batch and can resume. Dense
+retrieval is accepted only after unique ground-truth recovery, candidate
+volume, and the full Phase 6→10 OOF entity-level impact justify its cost.

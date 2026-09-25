@@ -78,6 +78,7 @@ This plan executes the architecture through evidence-driven gates. No downstream
 
 ## Phase 13: Dense Bi-Encoder Retrieval (Independent Conditional)
 - Evaluate Dense Retrieval *if* Phase 4 indicates semantic/linguistic shifts dominate.
+- On a 16 GB CPU machine, keep this branch optional: stream embeddings into a float16 disk cache, build a compressed Faiss IVF-PQ index, and evaluate its unique GT recovery before any downstream full run. Do not materialize all float32 target embeddings in RAM.
 - **MANDATORY RE-OPTIMIZATION:** Re-run Phase 6 (Features) → 7 (Pair Model) → 8 → 9 → 10.
 - *Decision:* Keep dense retrieval ONLY if the additional candidates produce a net improvement in the FINAL cross-fitted entity-level macro F₀.₅ that justifies compute cost.
 - *Dependency:* Phase 4 bottleneck analysis (independent of Phase 5).

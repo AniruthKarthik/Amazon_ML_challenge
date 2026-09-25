@@ -1,0 +1,3 @@
+# Optional Phase 13 only; never needed for the lexical CPU baseline.
+faiss-cpu==1.15.1
+sentence-transformers==6.1.0

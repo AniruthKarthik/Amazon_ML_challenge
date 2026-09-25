@@ -151,8 +151,10 @@
 ## Phase 13: Dense Bi-Encoder Retrieval (Independent Conditional)
 
 **Objective:** Address persistent semantic/linguistic retrieval misses from Phase 4.
-- [ ] Verify license/size for dense bi-encoder.
-- [ ] Add dense retrieval candidates to union. Evaluate independently or together with Phase 5.
+- [x] Verify optional multilingual MiniLM bi-encoder license (Apache-2.0) and size (~0.1B parameters); use a pinned revision at runtime. Keep optional Faiss and encoder dependencies out of the lexical baseline environment.
+- [x] Implement CPU batched, float16 disk-cached target embeddings, compressed Faiss IVF-PQ indexing, resumable target/query stages, bounded top-K arrays, and deterministic dense/lexical candidate union.
+- [x] Implement training-only dense-unique-GT, candidate recall and oracle entity F₀.₅ proxy comparison; synthetic tests include a tiny real Faiss index when the optional dependency is available.
+- [ ] Run Phase 4 taxonomy and the dense proxy on the user's CPU only if semantic/linguistic retrieval misses warrant it. Dense remains disabled by default on 16 GB RAM.
 - [ ] **MANDATORY RE-EVALUATION:** Re-run Phase 6 (Features) → Phase 7 (Pair Model) → Phase 8 (OOF) → Phase 9 (Aggregation) → Phase 10 (Thresholds).
 **Decision Gate:** Keep dense retrieval ONLY if the additional candidates produce a net improvement in the FINAL cross-fitted entity-level macro F₀.₅ that justifies compute cost, not just candidate recall.
 
