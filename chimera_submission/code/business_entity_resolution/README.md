@@ -39,3 +39,26 @@ generator yields bounded, deduplicated candidates with per-channel ranks and
 scores. `write_candidate_artifact` writes the internal pair-level audit
 artifact; the final competition `candidate_pairs.tsv` has a different,
 per-S1 format and is produced by the later inference phase.
+
+## Phase 4: training-only retrieval benchmark
+
+`src.phase4_benchmark` validates and indexes the training TSVs, runs the five
+Phase 3 retrieval channels, and writes `metrics.json`, `phase4_report.md`, a
+per-ground-truth-link retrieval-status TSV, and an auditable sample of genuine
+retrieval misses. It does not read test labels or estimate ranking failures.
+The complete training run and retrieval decision are deferred to Colab; the
+local tests use only small synthetic fixtures.
+
+```bash
+python -m src.phase4_benchmark \
+  --train-dir /path/to/dataset/train \
+  --output-dir /path/to/phase4-report \
+  --work-dir /path/to/phase4-work
+```
+
+The work directory holds a disk-backed store and per-channel candidate arrays.
+`--stage` can run `store`, one channel at a time, or `metrics` after all five
+channels complete. Completed channel stages are reused only with the same
+retrieval configuration. These training-wide results are exploratory, not
+cross-fitted model-selection estimates. Ranking failure analysis must wait
+for OOF LightGBM scores after Phases 7/8.

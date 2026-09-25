@@ -58,21 +58,27 @@ def _valid_id(identifier: str, source: int) -> bool:
     )
 
 
-def load_source(path: str | Path, source: int) -> dict[str, BusinessRecord]:
-    """Load one source TSV, preserving every row and every raw field value."""
+def iter_source(path: str | Path, source: int) -> Iterable[BusinessRecord]:
+    """Validate and stream source rows without retaining the full TSV."""
     if source not in (1, 2, 3):
         raise ValueError("source must be 1, 2, or 3")
     path = Path(path)
-    records: dict[str, BusinessRecord] = {}
     for line, row in _read_tsv(path, SOURCE_COLUMNS):
         identifier = row["entity_id"]
         if not _valid_id(identifier, source):
             raise DataContractError(f"{path}:{line}: invalid S{source} entity_id {identifier!r}")
         if not row["business_name"].strip():
             raise DataContractError(f"{path}:{line}: business_name is missing")
-        if identifier in records:
-            raise DataContractError(f"{path}:{line}: duplicate entity_id {identifier!r}")
-        records[identifier] = BusinessRecord(**row)
+        yield BusinessRecord(**row)
+
+
+def load_source(path: str | Path, source: int) -> dict[str, BusinessRecord]:
+    """Load one source TSV, preserving every row and every raw field value."""
+    records: dict[str, BusinessRecord] = {}
+    for record in iter_source(path, source):
+        if record.entity_id in records:
+            raise DataContractError(f"{path}: duplicate entity_id {record.entity_id!r}")
+        records[record.entity_id] = record
     return records
 
 

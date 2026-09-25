@@ -13,7 +13,7 @@
 - [x] Enforce schema validation (IDs must match prefix S1/S2/S3, business_name cannot be missing).
 - [x] Validate `train_ground_truth.tsv` (coverage of S1 entities, uniqueness of targets, valid IDs).
 - [ ] Analyze connected components in the training bipartite graph to inform folding.
-  - Graph analysis and metric reporting are implemented and tested on synthetic TSVs; running them on training data remains pending because `dataset/` is out of scope.
+  - Graph analysis and metric reporting are implemented and tested on synthetic TSVs; full-training execution is deferred to Colab.
 **Metrics:** Record counts, singleton ratio, graph component sizes.
 **Acceptance Criteria:** Zero silent data drops; strict TSV compliance.
 **Next Decision:** Proceed to Phase 2.
@@ -27,7 +27,7 @@
 - [x] Implement `business_address_clean` and `business_address_alias` formatting.
 - [x] Write unit tests for idempotence, Unicode edge cases, and empty strings.
 - [x] Verify raw representations are fully preserved in the output struct.
-  - Collision-rate calculation is implemented; dataset-wide rates and timing remain pending under the `dataset/` restriction.
+  - Collision-rate calculation is implemented; dataset-wide rates and timing are deferred to Colab.
 **Metrics:** Collision rate per view; execution time.
 **Acceptance Criteria:** Tests pass, raw data preserved, multi-view available.
 **Next Decision:** Proceed to Phase 3.
@@ -39,7 +39,7 @@
 - [x] Implement Character TF-IDF Name and Character TF-IDF Address KNN.
 - [x] Implement Rare-token retrieval index.
 - [x] Union candidates, deduplicate, and record provenance per channel.
-  - Per-channel counts and bounded generation are tested on synthetic records; real candidate volumes remain pending under the `dataset/` restriction.
+  - Per-channel counts and bounded generation are tested on synthetic records; full-training candidate volumes are deferred to Colab.
 **Metrics:** Candidate volume per channel.
 **Acceptance Criteria:** Base channels retrieve candidates without exploding memory.
 **Next Decision:** Proceed to Phase 4.
@@ -47,12 +47,13 @@
 ## Phase 4: Retrieval Benchmark + Error Taxonomy
 
 **Objective:** Measure whether base lexical retrieval recovers ground-truth candidates, and explicitly quantify retrieval vs ranking failures.
-- [ ] Calculate Micro candidate recall and Entity complete/any-hit recall.
-- [ ] Calculate Oracle entity-level F₀.₅ (assumes perfect pair classification).
-- [ ] Calculate explicit retrieval diversity matrix measuring **Unique GT Recovered** per channel (How many true matches does this channel recover that existing channels missed?).
-- [ ] Calculate explicit **Retrieval miss rate** = `(GT pairs absent from candidate set) / (all GT pairs)`.
-- [ ] Calculate explicit **Ranking failure rate** = `(GT pairs present in candidate set but failing ranking criterion) / (GT pairs present in candidate set)`.
-- [ ] Sample 500-1000 missed ground-truth links and classify by qualitative error taxonomy.
+- [x] Implement Micro candidate recall and Entity complete/any-hit recall.
+- [x] Implement Oracle entity-level F₀.₅ (assumes perfect pair classification).
+- [x] Implement retrieval diversity, incremental unions, and **Unique GT Recovered** per channel.
+- [x] Implement **Retrieval miss rate** = `(GT pairs absent from candidate set) / (all GT pairs)`.
+- [x] Implement reproducible sampling and taxonomy for up to 1000 genuine retrieval misses.
+- [ ] Execute the full-training benchmark in Colab, produce the quantitative report, and make the measured lexical/Word TF-IDF/Dense decision.
+- [ ] After Phases 7/8, calculate ranking failures from OOF LightGBM scores, including top-1, Recall@5/10, and false-positive competition; no Phase 4 ranking rate is claimed.
 **Metrics:** Oracle F₀.₅, Unique GT Recovered per channel, Retrieval Miss Rate, Ranking Failure Rate.
 **Acceptance Criteria:** Explicit quantitative error metric report produced.
 **Decision Gate:** 

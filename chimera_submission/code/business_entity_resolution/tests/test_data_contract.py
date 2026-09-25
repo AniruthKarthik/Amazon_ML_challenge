@@ -11,6 +11,7 @@ from unittest.mock import patch
 from src.data_contract import (
     DataContractError,
     connected_components,
+    iter_source,
     load_ground_truth,
     load_source,
     main,
@@ -40,6 +41,12 @@ class DataContractTests(unittest.TestCase):
         self.assertEqual(s1["S1-a"].business_name, "Café")
         self.assertEqual(s1["S1-a"].business_address, "")
         self.assertEqual(s1["S1-b"].country, "")
+
+    def test_streaming_source_loader_preserves_rows(self):
+        path = self.write("stream.tsv", "entity_id\tbusiness_name\tbusiness_address\tcountry\nS1-a\tCafé\t\tFrance\nS1-b\tShop\tAddr\t\n")
+        records = list(iter_source(path, 1))
+        self.assertEqual([record.entity_id for record in records], ["S1-a", "S1-b"])
+        self.assertEqual(records[0].business_address, "")
 
     def test_header_order_and_quoted_tabs(self):
         path = self.write("source.tsv", 'country\tentity_id\tbusiness_address\tbusiness_name\nFrance\tS1-x\t"12\tMain"\tName\n')
