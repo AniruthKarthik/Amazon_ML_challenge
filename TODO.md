@@ -188,3 +188,16 @@
 - [ ] Apply frozen transformations, retrieval, scoring, and locked thresholds to test set.
 - [ ] Run internal ID/format validators and official validator with `--check-ids`.
 **Acceptance Criteria:** Identical deterministic outputs across runs, validators PASS.
+
+## Improvement Roadmap A–I (implemented, defaults backward-compatible)
+
+- [x] Phase A: stratified pilot harness (`src/pilot.py`).
+- [x] Phase B: opt-in numeric blocker, exact truncation audit, cap sweep helper (`src/retrieval.py`).
+- [x] Phase C: expanded legal suffixes + street aliases, ambiguous `co` preserved (`src/normalization.py`).
+- [x] Phase D: database-free file store TSV+JSON (`src/file_store.py`); SQLite deprecated.
+- [x] Phase E: opt-in feature v2 + country ablation helper (`src/pair_features.py`, `src/text_sim.py`).
+- [x] Phase F: imbalance-aware pair model + reliability diagnostics (`src/pair_model.py`, `src/score_calibration.py`).
+- [x] Phase G: Policy D fallback-free rule + fine grid + per-cardinality metrics (`src/threshold_policy.py`, `src/entity_metrics.py`).
+- [x] Phase H: hard-negative compute gate (`src/mining_gate.py`); nested mining unchanged.
+- [x] Phase I: CPU parallel helpers + frozen-artifact checklist (`src/cpu_parallel.py`, `src/freeze_check.py`).
+- [ ] Full-data pilot run (100K S1), E0–E15 ablations, threshold freeze, test inference, official validation.
