@@ -7,6 +7,7 @@ from pathlib import Path
 
 
 MODEL_CODE_FILES = (
+    "cpu_resources.py",
     "data_contract.py", "normalization.py", "retrieval.py",
     "phase4_store.py", "phase4_char.py", "pipeline_store.py",
     "pair_features.py", "pair_model.py", "threshold_policy.py",

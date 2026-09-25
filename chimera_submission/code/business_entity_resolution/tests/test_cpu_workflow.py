@@ -5,6 +5,7 @@ import json
 import shutil
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from src.cpu_training import CPUTrainingConfig
@@ -101,6 +102,30 @@ class CPUWorkflowTests(unittest.TestCase):
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 with self.assertRaisesRegex(RuntimeError, "another CPU pipeline"):
                     run_cpu_workflow(self._config(root))
+
+    def test_parallel_workflow_matches_serial_fixture_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._inputs(root)
+            serial = self._config(root)
+            serial_result = run_cpu_workflow(serial)
+            parallel = replace(
+                serial, work_root=root / "parallel-work",
+                output_dir=root / "parallel-output", threads=2,
+                training=replace(
+                    serial.training,
+                    model=replace(serial.training.model, num_threads=2),
+                ),
+            )
+            parallel_result = run_cpu_workflow(parallel)
+            self.assertEqual(serial_result["validated_output"],
+                             parallel_result["validated_output"])
+            for name in ("matching_results.tsv", "candidate_pairs.tsv"):
+                self.assertEqual((serial.output_dir / name).read_bytes(),
+                                 (parallel.output_dir / name).read_bytes())
+            report = json.loads((parallel.work_root / "model" /
+                                 "training_report.json").read_text())
+            self.assertEqual(report["config"]["model"]["num_threads"], 2)
 
 
 if __name__ == "__main__":

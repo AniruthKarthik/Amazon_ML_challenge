@@ -161,7 +161,7 @@ def prepare_test_retrieval(
 
 def _write_batch(
     queries: list[QueryCandidates], extractor, model: lgb.Booster,
-    decision, matching_writer, candidate_writer,
+    decision, matching_writer, candidate_writer, num_threads: int,
     meta_policy: tuple[object, float, int] | None = None,
 ) -> None:
     rows = []
@@ -173,7 +173,8 @@ def _write_batch(
                 query.source, query.targets[candidate.candidate_entity_id], candidate,
             ).values()))
     probabilities = (
-        np.asarray(model.predict(np.asarray(rows, dtype=np.float32)), dtype=np.float64)
+        np.asarray(model.predict(np.asarray(rows, dtype=np.float32),
+                                 num_threads=num_threads), dtype=np.float64)
         if rows else np.empty(0, dtype=np.float64)
     )
     if not np.isfinite(probabilities).all() or np.any((probabilities < 0) | (probabilities > 1)):
@@ -216,6 +217,9 @@ def predict_test(
         raise ValueError("model was produced by different scoring/decision code")
     if report.get("scope", "").startswith("fixed-seed sampled") and not allow_exploratory:
         raise ValueError("sampled model is exploratory; pass allow_exploratory=True for a smoke run")
+    num_threads = int(report["config"]["model"]["num_threads"])
+    if num_threads < 1:
+        raise ValueError("frozen model thread count must be positive")
     decision = load_frozen_config(model_dir / "decision_config.json")
     if decision.score_path != "raw":
         raise ValueError("this inference runner only supports frozen raw-score policies")
@@ -265,11 +269,13 @@ def predict_test(
                 batch.append(query)
                 if len(batch) == batch_entities:
                     _write_batch(batch, extractor, model, decision,
-                                 matching_writer, candidate_writer, meta_policy)
+                                 matching_writer, candidate_writer,
+                                 num_threads, meta_policy)
                     batch.clear()
             if batch:
                 _write_batch(batch, extractor, model, decision,
-                             matching_writer, candidate_writer, meta_policy)
+                             matching_writer, candidate_writer,
+                             num_threads, meta_policy)
         validate_outputs(connection, matching_tmp, candidate_tmp)
         manifest = {
             "schema_version": OUTPUT_MANIFEST_VERSION,

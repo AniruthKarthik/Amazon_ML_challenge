@@ -12,6 +12,7 @@ import sqlite3
 import tempfile
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
 from math import log
 from pathlib import Path
@@ -153,13 +154,64 @@ def candidate_array(path: str | Path, rows: int, top_k: int, create: bool) -> np
     return values
 
 
+def _exact_range(db_path: Path, view: str, output_path: Path, source_count: int,
+                 top_k: int, start: int, end: int) -> int:
+    """Read one disjoint S1 range with a private read-only SQLite connection."""
+    connection = sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)
+    try:
+        connection.execute("PRAGMA cache_size=-16384")
+        output = np.memmap(output_path, dtype=np.int32, mode="r+",
+                           shape=(source_count, top_k))
+        find = connection.cursor()
+        for seq, value in connection.execute(
+            f"SELECT seq, {view} FROM source1 WHERE seq>=? AND seq<? ORDER BY seq",
+            (start, end),
+        ):
+            if not value:
+                continue
+            hits = find.execute(
+                f"SELECT seq FROM targets WHERE {view}=? ORDER BY entity_id LIMIT ?",
+                (value, top_k),
+            ).fetchall()
+            for rank, (target_seq,) in enumerate(hits):
+                output[seq, rank] = target_seq
+        output.flush()
+        return end - start
+    finally:
+        connection.close()
+
+
 def exact_channel(connection: sqlite3.Connection, view: str, path: str | Path,
-                  config: RetrievalConfig) -> None:
-    """Write top-K exact target indices in lexicographic target-ID order."""
+                  config: RetrievalConfig, threads: int = 1) -> None:
+    """Write deterministic top-K exact hits; parallel ranges have bounded RAM."""
     if view not in ("name_clean", "name_core"):
         raise ValueError("invalid exact view")
+    if threads < 1:
+        raise ValueError("threads must be positive")
     source_count = connection.execute("SELECT COUNT(*) FROM source1").fetchone()[0]
     output = candidate_array(path, source_count, config.top_k, create=True)
+    db_path = connection.execute("PRAGMA database_list").fetchone()[2]
+    if threads > 1 and source_count > 1 and db_path:
+        output.flush()
+        # Eight small ranges per worker smooth out uneven exact-name frequency.
+        chunk_size = max(1, (source_count + threads * 8 - 1) // (threads * 8))
+        ranges = [(start, min(start + chunk_size, source_count))
+                  for start in range(0, source_count, chunk_size)]
+        completed = 0
+        started = time.monotonic()
+        with ThreadPoolExecutor(max_workers=min(threads, len(ranges))) as executor:
+            pending = [executor.submit(
+                _exact_range, Path(db_path), view, Path(path), source_count,
+                config.top_k, start, end,
+            ) for start, end in ranges]
+            for future in as_completed(pending):
+                previous = completed
+                completed += future.result()
+                if completed == source_count or completed // 100_000 > previous // 100_000:
+                    elapsed = max(time.monotonic() - started, 0.001)
+                    print(f"{view}: {completed:,}/{source_count:,} S1 queries "
+                          f"({completed / elapsed:,.0f}/s)", flush=True)
+        return
     find = connection.cursor()
     started = time.monotonic()
     for seq, value in connection.execute(f"SELECT seq, {view} FROM source1 ORDER BY seq"):

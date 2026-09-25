@@ -12,6 +12,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.cpu_inference import prepare_test_retrieval, predict_test, validate_outputs
+from src.cpu_resources import available_cpu_count, parse_thread_count
 from src.cpu_training import CPUTrainingConfig, train_cpu_baseline
 from src.cpu_workflow import (
     CPUWorkflowConfig, open_training_candidate_store, run_cpu_workflow,
@@ -32,7 +33,9 @@ def _add_training_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--country-min-entities", type=int, default=100)
     parser.add_argument("--boost-rounds", type=int, default=100)
     parser.add_argument("--min-data-in-leaf", type=int, default=20)
-    parser.add_argument("--threads", type=int, default=4)
+    parser.add_argument("--threads", type=parse_thread_count,
+                        default=available_cpu_count(),
+                        help="parallel retrieval/model workers; auto uses all available CPU cores (default)")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--evaluate-meta", action="store_true")
     parser.add_argument("--max-worst-fold-drop", type=float)
@@ -84,7 +87,9 @@ def _parser() -> argparse.ArgumentParser:
     prepare.add_argument("--model-dir", type=Path, required=True)
     prepare.add_argument("--test-work", type=Path, required=True)
     prepare.add_argument("--shard-size", type=int, default=100_000)
-    prepare.add_argument("--threads", type=int, default=4)
+    prepare.add_argument("--threads", type=parse_thread_count,
+                         default=available_cpu_count(),
+                         help="parallel retrieval workers; auto uses all available CPU cores (default)")
     predict = commands.add_parser("predict", help="frozen model/policy TSV output")
     predict.add_argument("--model-dir", type=Path, required=True)
     predict.add_argument("--test-work", type=Path, required=True)

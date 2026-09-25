@@ -184,6 +184,7 @@
 - [x] Implement a validated, unlabeled test SQLite store and disk-backed lexical/dense candidate bridge with bounded per-query records, deterministic dedup/cap/provenance, and array-size checks. The existing Phase 4 work directory is read-only to this bridge.
 - [x] Implement staged CPU CLI for sampled training, unlabeled test retrieval, frozen batched inference, and streaming internal output validation; exploratory models require an explicit inference acknowledgment. Tiny synthetic official `--check-ids` integration test passes.
 - [x] Add a one-command provisional lexical CPU workflow with completed-stage reuse, input/configuration checks, output provenance hashes, and explicit `--allow-provisional`; synthetic end-to-end and resume tests pass. This does not satisfy the Phase 15 final-lock gate.
+- [x] Expose affinity-aware all-core thread selection for parallel exact/character retrieval and LightGBM stages, plus a Makefile runner; keep SQLite build and rare-token indexing sequential for bounded memory.
 - [ ] Apply frozen transformations, retrieval, scoring, and locked thresholds to test set.
 - [ ] Run internal ID/format validators and official validator with `--check-ids`.
 **Acceptance Criteria:** Identical deterministic outputs across runs, validators PASS.

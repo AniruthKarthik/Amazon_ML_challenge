@@ -16,6 +16,7 @@ from pathlib import Path
 import numpy as np
 
 from .phase4_char import char_channel
+from .cpu_resources import available_cpu_count, parse_thread_count
 from .phase4_metrics import CHANNEL_BITS, RetrievalBenchmark
 from .phase4_store import (
     build_store, candidate_array, exact_channel, open_store, rare_token_channel,
@@ -110,9 +111,9 @@ def run_channel(connection: sqlite3.Connection, channel: str, work_dir: Path,
             incomplete.unlink()
     print(f"building channel {channel}", flush=True)
     if channel == "exact_name":
-        exact_channel(connection, "name_clean", path, config)
+        exact_channel(connection, "name_clean", path, config, threads=threads)
     elif channel == "exact_core":
-        exact_channel(connection, "name_core", path, config)
+        exact_channel(connection, "name_core", path, config, threads=threads)
     elif channel == "rare_token":
         rare_token_channel(connection, path, config)
     elif channel in ("char_name", "char_address"):
@@ -353,7 +354,9 @@ def main() -> None:
     parser.add_argument("--top-k", type=int, default=50)
     parser.add_argument("--max-candidates", type=int, default=250)
     parser.add_argument("--shard-size", type=int, default=250_000)
-    parser.add_argument("--threads", type=int, default=8)
+    parser.add_argument("--threads", type=parse_thread_count,
+                        default=available_cpu_count(),
+                        help="parallel exact/character retrieval workers; auto uses all available CPU cores (default)")
     args = parser.parse_args()
     config = RetrievalConfig(top_k=args.top_k, max_candidates=args.max_candidates)
     run(args.train_dir, args.output_dir, args.work_dir, config,

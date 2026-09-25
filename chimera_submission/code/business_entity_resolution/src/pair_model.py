@@ -181,7 +181,8 @@ def train_pair_baseline(
         callbacks=callbacks,
     )
     scores = np.asarray(
-        model.predict(valid_x, num_iteration=model.best_iteration or None),
+        model.predict(valid_x, num_iteration=model.best_iteration or None,
+                      num_threads=config.num_threads),
         dtype=np.float64,
     )
     if not np.isfinite(scores).all() or np.any((scores < 0) | (scores > 1)):

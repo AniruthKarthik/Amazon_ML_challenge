@@ -142,7 +142,7 @@ def _matrix(
 def _score_queries(
     store: DiskCandidateStore, sequences: tuple[int, ...],
     extractor: PairFeatureExtractor, model: lgb.Booster,
-    fold_by_seq: dict[int, int],
+    fold_by_seq: dict[int, int], num_threads: int,
 ) -> list[OOFEntity]:
     entities = []
     for seq in sequences:
@@ -154,7 +154,8 @@ def _score_queries(
                     query.source, query.targets[item.candidate_entity_id], item,
                 ).values()) for item in candidates
             ], dtype=np.float32)
-            scores = tuple(float(value) for value in model.predict(matrix))
+            scores = tuple(float(value) for value in model.predict(
+                matrix, num_threads=num_threads))
         else:
             scores = ()
         entities.append(OOFEntity(
@@ -282,7 +283,8 @@ def train_cpu_baseline(
         )
         fold_diagnostics[fold] = result.pair_diagnostics
         oof_entities.extend(_score_queries(
-            store, valid_seqs, extractor, result.model, fold_by_seq))
+            store, valid_seqs, extractor, result.model, fold_by_seq,
+            config.model.num_threads))
         print(f"completed OOF fold {fold + 1}/{config.folds}", flush=True)
     audit = _write_audit_artifacts(
         building, store, sequences, fold_by_seq, oof_entities)

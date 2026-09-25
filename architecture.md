@@ -170,6 +170,7 @@ A frozen, deterministic pipeline.
 ## 18. Resource Constraints
 
 - Memory usage is tracked via CSR sparse matrices, batching, and top-K limits.
+- The provisional CPU runner resolves `threads=auto` to the process's available logical cores for parallel exact/character retrieval and LightGBM operations; serial store/rare-token stages are not run concurrently on a 16 GB machine.
 - Dense/Cross-encoder models (if used) strictly enforce ≤8B parameters and MIT/Apache 2.0 licensing.
 
 ---

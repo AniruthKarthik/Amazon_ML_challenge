@@ -71,6 +71,16 @@ class Phase4StoreTests(unittest.TestCase):
         rare_path = self.root / "rare.bin"
         exact_channel(connection, "name_clean", exact_name_path, config)
         exact_channel(connection, "name_core", exact_core_path, config)
+        for view, serial_path in (("name_clean", exact_name_path),
+                                  ("name_core", exact_core_path)):
+            parallel_path = self.root / f"{view}.parallel.bin"
+            exact_channel(connection, view, parallel_path, config, threads=2)
+            np.testing.assert_array_equal(
+                candidate_array(serial_path, 2, 3, create=False),
+                candidate_array(parallel_path, 2, 3, create=False))
+        with self.assertRaisesRegex(ValueError, "threads must be positive"):
+            exact_channel(connection, "name_clean", self.root / "invalid.bin",
+                          config, threads=0)
         rare_token_channel(connection, rare_path, config)
         rare_scores = np.memmap(rare_path.with_suffix(".float32"), dtype=np.float32,
                                 mode="r", shape=(2, 3))
@@ -162,6 +172,17 @@ class Phase4StoreTests(unittest.TestCase):
             char_channel(connection, view, output_path, self.root / f"{channel}.scores",
                          config, shard_size=2, query_batch_size=1, threads=1)
             output = candidate_array(output_path, 2, 2, create=False)
+            parallel_path = self.root / f"{channel}.parallel.bin"
+            char_channel(connection, view, parallel_path,
+                         self.root / f"{channel}.parallel.scores",
+                         config, shard_size=2, query_batch_size=1, threads=2)
+            np.testing.assert_array_equal(
+                output, candidate_array(parallel_path, 2, 2, create=False))
+            np.testing.assert_array_equal(
+                np.memmap(self.root / f"{channel}.scores", dtype=np.float32,
+                          mode="r", shape=(2, 2)),
+                np.memmap(self.root / f"{channel}.parallel.scores",
+                          dtype=np.float32, mode="r", shape=(2, 2)))
             for source_seq, source_id in enumerate(source_ids):
                 actual = {target_ids[index] for index in output[source_seq] if index >= 0}
                 expected_ids = {target_id for (query_id, target_id), channels in expected.items()
@@ -203,7 +224,7 @@ class Phase4StoreTests(unittest.TestCase):
         output_dir = self.root / "reports"
         work_dir = self.root / "work"
         config = RetrievalConfig(top_k=2, max_candidates=10)
-        run(self.train, output_dir, work_dir, config, "all", shard_size=2, threads=1)
+        run(self.train, output_dir, work_dir, config, "all", shard_size=2, threads=2)
         metrics = json.loads((output_dir / "metrics.json").read_text(encoding="utf-8"))
         self.assertEqual(metrics["groups"]["overall"]["ground_truth_links"], 3)
         self.assertEqual(metrics["groups"]["overall"]["recovered_links"], 3)
@@ -215,7 +236,7 @@ class Phase4StoreTests(unittest.TestCase):
         self.assertEqual(len(rows), 4)
         self.assertTrue(all(row[2] == "1" for row in rows[1:]))
         self.assertIn("No ranking-failure rate", (output_dir / "phase4_report.md").read_text(encoding="utf-8"))
-        run(self.train, output_dir, work_dir, config, "metrics", shard_size=2, threads=1)
+        run(self.train, output_dir, work_dir, config, "metrics", shard_size=2, threads=2)
         with self.assertRaises(ValueError):
             run(self.train, output_dir, work_dir,
                 RetrievalConfig(top_k=1, max_candidates=5), "exact_name",

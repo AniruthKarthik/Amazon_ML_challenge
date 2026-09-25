@@ -7,12 +7,31 @@ Team: `chimera`
 Run the complete **provisional lexical baseline** from this directory with:
 
 ```bash
-python -m src.main run \
+make run
+```
+
+`make run` uses `.venv/bin/python`, all logical CPU cores available to the
+process for parallel exact/character retrieval and LightGBM stages,
+and a 3000-S1 sampled training smoke run. Override settings with, for example,
+`make run TRAIN_ENTITIES=5000 THREADS=8`; `THREADS=auto` is the default.
+To reuse a completed earlier Phase 4 run, set both
+`PHASE4_WORK=/path/to/phase4-work` and `PHASE4_REPORT=/path/to/phase4-report`.
+Run `make cpu-info` to see the detected core count, `make test` for synthetic
+tests, and `make validate` to recheck an existing output. `make validate-official`
+adds the higher-memory official ID check. The SQLite store build and rare-token
+stages remain serial; running channels concurrently would raise
+peak memory on a 16 GB machine. More threads may not make every stage faster.
+
+The equivalent direct invocation is:
+
+```bash
+.venv/bin/python -B -m src.main run \
   --train-dir ../../../dataset/train \
   --test-dir ../../../dataset/test \
   --work-root ../../../cpu-run \
   --output-dir ../../../provisional-output \
   --train-entities 3000 \
+  --threads auto \
   --allow-provisional
 ```
 
