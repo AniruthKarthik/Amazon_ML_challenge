@@ -267,6 +267,8 @@ class CandidateRetriever:
             if use_gpu:
                 import torch
                 device = torch.device('cuda')
+                if verbose and b_start == 0:
+                    print(f"\n  [GPU] Using PyTorch CUDA acceleration for TF-IDF {channel_name} retrieval")
                 # Move target_matrix to PyTorch sparse CSR once if not already done
                 if not hasattr(self, '_torch_target_matrices'):
                     self._torch_target_matrices = {}
