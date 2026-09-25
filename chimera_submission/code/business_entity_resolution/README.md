@@ -137,3 +137,18 @@ Run `threshold_sensitivity` with a chosen perturbation and
 grid, selected thresholds, fold and country diagnostics, singleton error
 rates, and decision proportions. These functions are implemented and covered
 by synthetic tests; project-data search and threshold freezing await Colab.
+
+## Phase 11: nested hard-negative mining
+
+`src.hard_negative_mining.generate_hard_negative_oof_predictions` fits inner
+mining models inside each outer training split, so neither the mined pairs nor
+their scores depend on that outer fold's labels. It selects high-scoring known
+negatives at an explicitly supplied score cutoff, caps them per S1, and gives
+them additional LightGBM training weight without copying feature rows. It
+produces new raw OOF scores and per-fold mining diagnostics. No mining cutoff
+is selected from test data or the heldout fold. `compare_raw_oof_hard_negatives`
+re-runs the same Phase 9/10 threshold search on baseline and mined raw scores;
+it reports, but does not automatically accept, any cross-fitted entity F₀.₅
+gain. If the calibrated pathway is retained, its nested OOF calibrator must
+also be regenerated before a final acceptance decision. Full project-data
+training, downstream re-optimization, and the keep/reject decision await Colab.

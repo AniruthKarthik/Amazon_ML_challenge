@@ -90,6 +90,22 @@ class PairModelTests(unittest.TestCase):
                 self.train_groups, self.valid_groups, self.config,
             )
 
+    def test_optional_training_weights_are_validated(self):
+        result = train_pair_baseline(
+            self.train_x, self.train_y, self.valid_x, self.valid_y,
+            self.names, self.train_groups, self.valid_groups, self.config,
+            train_weights=np.ones(len(self.train_x)),
+        )
+        self.assertEqual(len(result.validation_scores), len(self.valid_x))
+        for weights in (np.zeros(len(self.train_x)),
+                        np.full(len(self.train_x), np.nan), np.ones(4)):
+            with self.assertRaisesRegex(ValueError, "training weights"):
+                train_pair_baseline(
+                    self.train_x, self.train_y, self.valid_x, self.valid_y,
+                    self.names, self.train_groups, self.valid_groups,
+                    self.config, train_weights=weights,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

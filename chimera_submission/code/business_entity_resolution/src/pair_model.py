@@ -123,6 +123,7 @@ def train_pair_baseline(
     train_components: Iterable[str | int],
     valid_components: Iterable[str | int],
     config: BaselineConfig = BaselineConfig(),
+    train_weights: np.ndarray | None = None,
 ) -> PairBaselineResult:
     """Fit one component-disjoint fold; no full-data or test-set training here."""
     if not feature_names or len(set(feature_names)) != len(feature_names):
@@ -140,9 +141,16 @@ def train_pair_baseline(
         raise ValueError("training and validation share a graph component")
     if len(np.unique(train_y)) != 2:
         raise ValueError("training fold needs both positive and negative pairs")
+    weights = None
+    if train_weights is not None:
+        weights = np.asarray(train_weights, dtype=np.float64)
+        if (weights.ndim != 1 or len(weights) != len(train_x)
+                or not np.isfinite(weights).all() or np.any(weights <= 0)):
+            raise ValueError("training weights must be aligned, finite and positive")
 
     train_data = lgb.Dataset(
-        train_x, label=train_y, feature_name=list(feature_names), free_raw_data=True,
+        train_x, label=train_y, weight=weights,
+        feature_name=list(feature_names), free_raw_data=True,
     )
     valid_data = lgb.Dataset(
         valid_x, label=valid_y, feature_name=list(feature_names),

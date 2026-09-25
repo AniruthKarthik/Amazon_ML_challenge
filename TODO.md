@@ -132,9 +132,10 @@
 ## Phase 11: Hard-Negative Mining
 
 **Objective:** Improve pair model discrimination through cross-fitted negative mining.
-- [ ] Mine false positives using Fold A model to generate negatives for Fold B.
-- [ ] Retrain pair scorer on augmented dataset.
-- [ ] **MANDATORY RE-EVALUATION:** Re-run Phase 8 (OOF) → Phase 9 (Aggregation) → Phase 10 (Thresholds).
+- [x] Implement nested mining: for each outer heldout fold, fit inner models only on other folds; select high-scoring known negatives from inner OOF scores, capped per S1 with deterministic ties. The mining cutoff is an explicit training-only experiment setting, never fitted from the heldout fold or test data.
+- [x] Implement weighted retraining of the outer LightGBM scorer on those mined training negatives and emit raw OOF scores, fold diagnostics, and mined-row audit indices. Use fixed boosting rounds; heldout labels influence diagnostics only.
+- [x] Implement an identical-grid raw OOF baseline-vs-mined Phase 9/10 comparison hook; synthetic tests verify outer-label isolation and cross-fitted entity F₀.₅ comparison.
+- [ ] In Colab, run the full mined OOF experiment and mandatory Phase 8 → 9 → 10 re-evaluation. If calibration is retained, regenerate its nested OOF pathway before any acceptance decision; do not reuse the old calibrator.
 **Decision Gate:** Keep if FINAL cross-fitted entity-level F₀.₅ improves.
 
 ## Phase 12: Entity-Level Decision / Meta Model
