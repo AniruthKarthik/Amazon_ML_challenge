@@ -10,6 +10,7 @@ import csv
 import os
 import sqlite3
 import tempfile
+import time
 from collections import defaultdict
 from functools import lru_cache
 from math import log
@@ -160,7 +161,12 @@ def exact_channel(connection: sqlite3.Connection, view: str, path: str | Path,
     source_count = connection.execute("SELECT COUNT(*) FROM source1").fetchone()[0]
     output = candidate_array(path, source_count, config.top_k, create=True)
     find = connection.cursor()
+    started = time.monotonic()
     for seq, value in connection.execute(f"SELECT seq, {view} FROM source1 ORDER BY seq"):
+        if (seq + 1) % 100_000 == 0:
+            elapsed = max(time.monotonic() - started, 0.001)
+            print(f"{view}: {seq + 1:,}/{source_count:,} S1 queries "
+                  f"({(seq + 1) / elapsed:,.0f}/s)", flush=True)
         if not value:
             continue
         hits = find.execute(
@@ -210,10 +216,14 @@ def rare_token_channel(connection: sqlite3.Connection, path: str | Path,
                     postings_db.executemany("INSERT INTO postings VALUES (?,?)", batch)
                     postings_db.commit()
                     batch.clear()
+                if (target_seq + 1) % 1_000_000 == 0:
+                    print(f"rare_token: indexed {target_seq + 1:,}/{target_count:,} targets",
+                          flush=True)
             if batch:
                 postings_db.executemany("INSERT INTO postings VALUES (?,?)", batch)
                 postings_db.commit()
             postings_db.execute("CREATE INDEX posting_token_seq ON postings(token,target_seq)")
+            print("rare_token: built disk posting index", flush=True)
             postings_db.execute(
                 "CREATE TABLE allowed AS SELECT token, COUNT(*) AS frequency "
                 "FROM postings GROUP BY token HAVING COUNT(*)<=?",
@@ -221,6 +231,7 @@ def rare_token_channel(connection: sqlite3.Connection, path: str | Path,
             )
             postings_db.execute("CREATE UNIQUE INDEX allowed_token ON allowed(token)")
             postings_db.commit()
+            print("rare_token: applied document-frequency cutoff", flush=True)
 
             @lru_cache(maxsize=100_000)
             def token_weight(token: str) -> float | None:
@@ -242,6 +253,9 @@ def rare_token_channel(connection: sqlite3.Connection, path: str | Path,
             output_scores[:] = -np.inf
             for seq, name in connection.execute(
                 "SELECT seq, name_core FROM source1 ORDER BY seq"):
+                if (seq + 1) % 100_000 == 0:
+                    print(f"rare_token: processed {seq + 1:,}/{source_count:,} S1 queries",
+                          flush=True)
                 weighted_tokens = [(token, token_weight(token))
                                    for token in sorted(set(name.split()))]
                 weighted_tokens = [(token, weight) for token, weight in weighted_tokens

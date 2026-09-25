@@ -80,6 +80,9 @@ Rare-token retrieval now builds its postings in a temporary SQLite scratch
 database in that work directory instead of retaining the full token dictionary
 in Python RAM. This preserves the same DF cutoff, scores, and target-ID tie
 order, but requires free disk space and can trade speed for lower peak memory.
+Long-running exact and rare stages now print coarse S1 progress; character
+stages print completed target shards. These messages report work completed,
+not estimated time remaining.
 `--stage` can run `store`, one channel at a time, or `metrics` after all five
 channels complete. Completed channel stages are reused only with the same
 retrieval configuration. These training-wide results are exploratory, not

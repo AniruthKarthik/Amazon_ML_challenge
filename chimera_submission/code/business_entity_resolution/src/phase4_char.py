@@ -202,4 +202,6 @@ def char_channel(connection: sqlite3.Connection, view: str, candidate_path: str 
             candidates.flush()
             scores.flush()
             del target_matrix
+            print(f"{view}: completed target shard through {target_end:,}/"
+                  f"{target_count:,} targets", flush=True)
     del target_ids
