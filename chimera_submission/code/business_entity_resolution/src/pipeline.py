@@ -49,16 +49,16 @@ from chimera_submission.code.business_entity_resolution.src.pair_model import (
 class PipelineConfig:
     k_folds: int = 5
     random_seed: int = 42
-    top_k_name_tfidf: int = 25
-    top_k_addr_tfidf: int = 15
-    top_k_word_tfidf: int = 15
-    min_tfidf_score: float = 0.25
-    enable_word_tfidf: bool = False
-    max_candidates_per_entity: int = 60
-    lgb_n_estimators: int = 120
-    lgb_learning_rate: float = 0.08
-    lgb_max_depth: int = 6
-    lgb_num_leaves: int = 31
+    top_k_name_tfidf: int = 35
+    top_k_addr_tfidf: int = 25
+    top_k_word_tfidf: int = 20
+    min_tfidf_score: float = 0.20
+    enable_word_tfidf: bool = True
+    max_candidates_per_entity: int = 80
+    lgb_n_estimators: int = 180
+    lgb_learning_rate: float = 0.06
+    lgb_max_depth: int = 7
+    lgb_num_leaves: int = 45
     pair_threshold: float = 0.50
     entity_threshold: float = 0.55
     gap_threshold: float = 0.15
@@ -397,8 +397,8 @@ class BusinessEntityResolutionPipeline:
             target_keep = [c for c in ["name_clean", "name_core", "address_clean", "address_alias", "country"] if c in target_c_norm.columns]
             target_c_norm = target_c_norm.set_index("entity_id")[target_keep]
 
-            # Stream S1 queries for this country partition in memory-safe batches of 10,000 entities
-            s1_batch_size = 10000
+            # Stream S1 queries for this country partition in memory-safe batches of 20,000 entities
+            s1_batch_size = 20000
             n_s1_batches = (len(s1_norm) + s1_batch_size - 1) // s1_batch_size
 
             for b_idx in range(n_s1_batches):

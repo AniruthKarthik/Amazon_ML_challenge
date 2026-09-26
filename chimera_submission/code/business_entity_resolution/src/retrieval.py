@@ -124,20 +124,20 @@ class CandidateRetriever:
             analyzer="char_wb",
             ngram_range=(3, 4),
             min_df=min_df_val,
-            max_features=60000,
+            max_features=80000,
             sublinear_tf=True,
             dtype=np.float32,
         )
         self._target_name_matrix = self._name_vectorizer.fit_transform(name_corpus)
 
         # 3. Word TF-IDF Address Vectorizer (word n-grams 1-2)
-        # Using word n-grams captures address tokens while reducing matrix density 8x (saving ~15 GB RAM)
+        # Using word n-grams captures address tokens while reducing matrix density
         addr_corpus = target_df["address_clean"].fillna("").tolist()
         self._addr_vectorizer = TfidfVectorizer(
             analyzer="word",
             ngram_range=(1, 2),
             min_df=min_df_val,
-            max_features=40000,
+            max_features=60000,
             sublinear_tf=True,
             dtype=np.float32,
         )
@@ -176,7 +176,7 @@ class CandidateRetriever:
             self._word_vectorizer = TfidfVectorizer(
                 analyzer="word",
                 ngram_range=(1, 2),
-                min_df=1,
+                min_df=min_df_val,
                 max_features=60000,
                 sublinear_tf=True,
                 dtype=np.float32,
@@ -286,7 +286,7 @@ class CandidateRetriever:
             del sim_mat
             return local_cands
 
-        workers = min(4, os.cpu_count() or 1) if n_jobs != 1 else 1
+        workers = min(8, os.cpu_count() or 1) if n_jobs != 1 else 1
         chunks = [
             (b_start, min(b_start + batch_size, total_queries))
             for b_start in range(0, total_queries, batch_size)

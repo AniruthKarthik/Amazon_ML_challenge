@@ -58,8 +58,9 @@ _SUFFIX_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-# Address abbreviations dictionary (standardizing common terms)
+# Address abbreviations dictionary (standardizing common terms across US, France, India)
 ADDRESS_ABBREVIATIONS = {
+    # Common English / US terms
     r"\bst\b": "street",
     r"\brd\b": "road",
     r"\bave\b": "avenue",
@@ -72,6 +73,7 @@ ADDRESS_ABBREVIATIONS = {
     r"\bsq\b": "square",
     r"\bpkwy\b": "parkway",
     r"\bhwy\b": "highway",
+    r"\btpk\b": "turnpike",
     r"\bste\b": "suite",
     r"\bapt\b": "apartment",
     r"\bfl\b": "floor",
@@ -81,6 +83,19 @@ ADDRESS_ABBREVIATIONS = {
     r"\bctr\b": "center",
     r"\bstr\b": "street",
     r"\bno\b": "number",
+    # French address patterns
+    r"\bbd\b": "boulevard",
+    r"\ball\b": "allee",
+    r"\brte\b": "route",
+    r"\bzi\b": "zone industrielle",
+    r"\bza\b": "zone activite",
+    r"\bcedex\b": "cedex",
+    # Indian address patterns
+    r"\bsec\b": "sector",
+    r"\bcol\b": "colony",
+    r"\bcomp\b": "complex",
+    r"\bmrg\b": "marg",
+    r"\bbzn\b": "bazar",
     r"\bopp\b": "opposite",
     r"\bnr\b": "near",
 }
