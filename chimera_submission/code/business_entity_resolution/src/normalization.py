@@ -165,15 +165,22 @@ class TextNormalizer:
         return " ".join(cleaned.split())
 
     @staticmethod
+    def alias_clean_address(clean_addr: Optional[str]) -> str:
+        """Apply address abbreviation regexes on pre-cleaned address."""
+        if not clean_addr:
+            return ""
+        result = clean_addr
+        for pattern, replacement in _COMPILED_ADDR_ABBR:
+            result = pattern.sub(replacement, result)
+        return " ".join(result.split())
+
+    @staticmethod
     def alias_address(text: Optional[str]) -> str:
         """Produce `address_alias` view: expands common abbreviations (st, rd, apt, etc.)."""
         if not text:
             return ""
         clean_addr = TextNormalizer.clean_address(text)
-        result = clean_addr
-        for pattern, replacement in _COMPILED_ADDR_ABBR:
-            result = pattern.sub(replacement, result)
-        return " ".join(result.split())
+        return TextNormalizer.alias_clean_address(clean_addr)
 
     @classmethod
     def _normalize_single(cls, df: pd.DataFrame) -> pd.DataFrame:
@@ -181,8 +188,9 @@ class TextNormalizer:
         out_df["name_clean"] = out_df["business_name"].apply(cls.clean_name)
         out_df["name_folded"] = out_df["business_name"].apply(cls.fold_accents)
         out_df["name_core"] = out_df["business_name"].apply(cls.extract_core_name)
-        out_df["address_clean"] = out_df["business_address"].apply(cls.clean_address)
-        out_df["address_alias"] = out_df["business_address"].apply(cls.alias_address)
+        clean_addrs = out_df["business_address"].apply(cls.clean_address)
+        out_df["address_clean"] = clean_addrs
+        out_df["address_alias"] = clean_addrs.apply(cls.alias_clean_address)
         return out_df
 
     @classmethod

@@ -396,6 +396,9 @@ class PairFeatureExtractor:
             with ctx.Pool(processes=n_workers) as pool:
                 results_nested = pool.map(_extract_chunk_worker, chunks)
 
+            _worker_s1_records = {}
+            _worker_cand_records = {}
+
             features_list = [item for sublist in results_nested for item in sublist]
             if verbose:
                 print(f"\r  [Feature Extraction (Multi-Core)] Completed {total_pairs}/{total_pairs} pairs (100.0%) across {n_workers} CPU cores.    ")

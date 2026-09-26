@@ -272,130 +272,136 @@ class BusinessEntityResolutionPipeline:
         self.retriever = None
         gc.collect()
 
-        # 1. Multi-view Normalization
-        print("\n  [Inference Stage 1/4] Normalizing Test Entities...")
+        print("\n  [Inference Stage 1/4] Preparing Country-Partitioned Inference Pipeline...")
         keep_cols = ["entity_id", "name_clean", "name_core", "address_clean", "address_alias", "country"]
+        active_policy = self.locked_policy or EntityDecisionPolicy()
 
-        s1_norm = TextNormalizer.normalize_dataframe(test_s1_df, n_jobs=self.config.n_jobs)
-        s1_norm = s1_norm[[c for c in keep_cols if c in s1_norm.columns]].copy()
+        streaming_to_disk = matching_out is not None and candidates_out is not None
+        if streaming_to_disk:
+            matching_out = Path(matching_out)
+            candidates_out = Path(candidates_out)
+            matching_out.parent.mkdir(parents=True, exist_ok=True)
+            candidates_out.parent.mkdir(parents=True, exist_ok=True)
+            if matching_out.exists():
+                matching_out.unlink()
+            if candidates_out.exists():
+                candidates_out.unlink()
 
-        s2_norm = TextNormalizer.normalize_dataframe(test_s2_df, n_jobs=self.config.n_jobs)
-        s2_norm = s2_norm[[c for c in keep_cols if c in s2_norm.columns]].copy()
+        all_matching_dfs: List[pd.DataFrame] = []
+        all_candidate_dfs: List[pd.DataFrame] = []
+        total_matches_saved = 0
+        total_cands_saved = 0
+        seen_s1_ids: Set[str] = set()
+        is_first_write = True
 
-        s3_norm = TextNormalizer.normalize_dataframe(test_s3_df, n_jobs=self.config.n_jobs)
-        s3_norm = s3_norm[[c for c in keep_cols if c in s3_norm.columns]].copy()
+        all_test_s1_ids = set(test_s1_df["entity_id"])
 
-        target_norm = pd.concat([s2_norm, s3_norm], ignore_index=True)
-        del s2_norm, s3_norm
-        gc.collect()
+        # Discover all unique countries (preserving open-set country support)
+        countries = sorted(list({str(c).strip() for c in test_s1_df["country"].dropna().unique() if str(c).strip()}))
+        has_empty_country = bool((test_s1_df["country"].isna() | (test_s1_df["country"].astype(str).str.strip() == "")).any())
+        if has_empty_country:
+            countries.append("")
 
-        all_s1_ids = set(s1_norm["entity_id"])
-        s1_country_map = dict(zip(s1_norm["entity_id"], s1_norm["country"]))
+        print(f"  [Inference Memory Management] Processing {len(all_test_s1_ids)} entities across {len(countries)} country partition(s): {countries}...")
 
-        # 2. Candidate Retrieval on Test Target Corpus
-        print("\n  [Inference Stage 2/4] Multi-Channel Candidate Retrieval on Test Corpus...")
         from chimera_submission.code.business_entity_resolution.src.retrieval import (
             CandidateRetriever,
         )
 
-        test_retriever = CandidateRetriever(
-            top_k_name_tfidf=self.config.top_k_name_tfidf,
-            top_k_addr_tfidf=self.config.top_k_addr_tfidf,
-            min_tfidf_score=self.config.min_tfidf_score,
-            enable_word_tfidf=self.config.enable_word_tfidf,
-            top_k_word_tfidf=self.config.top_k_word_tfidf,
-            max_candidates_per_entity=self.config.max_candidates_per_entity,
-        )
-        test_retriever.fit(target_norm)
+        for c_idx, country in enumerate(countries, start=1):
+            c_label = country if country else "EMPTY_COUNTRY"
+            print(f"\n  --- Country Partition [{c_idx}/{len(countries)}]: {c_label} ---")
 
-        total_s1 = len(s1_norm)
-        batch_size = 50000
+            if country:
+                s1_mask = test_s1_df["country"].fillna("").astype(str).str.strip() == country
+                s2_mask = test_s2_df["country"].fillna("").astype(str).str.strip() == country
+                s3_mask = test_s3_df["country"].fillna("").astype(str).str.strip() == country
+            else:
+                s1_mask = test_s1_df["country"].isna() | (test_s1_df["country"].astype(str).str.strip() == "")
+                s2_mask = test_s2_df["country"].isna() | (test_s2_df["country"].astype(str).str.strip() == "")
+                s3_mask = test_s3_df["country"].isna() | (test_s3_df["country"].astype(str).str.strip() == "")
 
-        if total_s1 <= batch_size:
-            candidates_raw = test_retriever.retrieve(s1_norm, n_jobs=self.config.n_jobs)
-            candidate_pairs_df = test_retriever.to_candidate_pairs_tsv(
-                candidates_raw, all_s1_ids=all_s1_ids
-            )
-            pairs_df = test_retriever.to_dataframe(candidates_raw)
+            s1_c = test_s1_df[s1_mask]
+            if s1_c.empty:
+                continue
 
-            if pairs_df.empty:
-                matching_results_df = EntityAggregator.to_matching_results_tsv({}, all_s1_ids)
-                if matching_out is not None and candidates_out is not None:
-                    matching_results_df.to_csv(matching_out, sep="\t", index=False, encoding="utf-8")
-                    candidate_pairs_df.to_csv(candidates_out, sep="\t", index=False, encoding="utf-8")
-                return matching_results_df, candidate_pairs_df
+            s2_c = test_s2_df[s2_mask]
+            s3_c = test_s3_df[s3_mask]
+            s1_c_ids = set(s1_c["entity_id"])
+            print(f"  Entities: S1={len(s1_c)}, S2={len(s2_c)}, S3={len(s3_c)}")
 
-            # 3. Feature Extraction
-            print("\n  [Inference Stage 3/4] Pair Feature Extraction on Test Candidates...")
-            needed_targets = set(pairs_df["candidate_entity_id"])
-            sub_target = target_norm[target_norm["entity_id"].isin(needed_targets)]
-            target_records = sub_target.set_index("entity_id").to_dict(orient="index")
-            del sub_target
+            # When target has no entities for this country, all S1 entities are singletons!
+            if s2_c.empty and s3_c.empty:
+                print(f"  Target corpus is empty for {c_label}; all {len(s1_c)} S1 entities are singletons.")
+                c_match_tsv = EntityAggregator.to_matching_results_tsv({}, s1_c_ids)
+                c_cand_tsv = pd.DataFrame({
+                    "source1_entity_id": sorted(s1_c_ids),
+                    "candidate_entity_ids": [""] * len(s1_c_ids),
+                })
+                if streaming_to_disk:
+                    mode = "w" if is_first_write else "a"
+                    header = is_first_write
+                    c_cand_tsv.to_csv(candidates_out, sep="\t", index=False, mode=mode, header=header, encoding="utf-8")
+                    c_match_tsv.to_csv(matching_out, sep="\t", index=False, mode=mode, header=header, encoding="utf-8")
+                    is_first_write = False
+                    total_matches_saved += len(c_match_tsv)
+                    total_cands_saved += len(c_cand_tsv)
+                else:
+                    all_matching_dfs.append(c_match_tsv)
+                    all_candidate_dfs.append(c_cand_tsv)
+                seen_s1_ids.update(s1_c_ids)
+                del s1_c, s2_c, s3_c, c_match_tsv, c_cand_tsv
+                gc.collect()
+                continue
 
-            s1_records = s1_norm.set_index("entity_id").to_dict(orient="index")
-            feats_df = PairFeatureExtractor.build_features(
-                pairs_df,
-                s1_records=s1_records,
-                cand_records=target_records,
-                n_jobs=self.config.n_jobs,
-            )
-            del s1_records, target_records
+            # Normalize S1 and Target entities strictly within this country partition
+            s1_norm = TextNormalizer.normalize_dataframe(s1_c, n_jobs=self.config.n_jobs, verbose=False)
+            s1_norm = s1_norm[[c for c in keep_cols if c in s1_norm.columns]].copy()
+            s1_country_map = dict(zip(s1_norm["entity_id"], s1_norm["country"]))
+
+            s2_norm = TextNormalizer.normalize_dataframe(s2_c, n_jobs=self.config.n_jobs, verbose=False) if not s2_c.empty else pd.DataFrame(columns=keep_cols)
+            s2_norm = s2_norm[[c for c in keep_cols if c in s2_norm.columns]].copy()
+
+            s3_norm = TextNormalizer.normalize_dataframe(s3_c, n_jobs=self.config.n_jobs, verbose=False) if not s3_c.empty else pd.DataFrame(columns=keep_cols)
+            s3_norm = s3_norm[[c for c in keep_cols if c in s3_norm.columns]].copy()
+
+            target_c_norm = pd.concat([s2_norm, s3_norm], ignore_index=True)
+            del s2_norm, s3_norm, s2_c, s3_c
             gc.collect()
 
-            # 4. Ensemble Pair Scoring
-            print("\n  [Inference Stage 4/4] Bagged Ensemble Pair Scoring & Applying Locked Policy...")
-            scores = self.pair_scorer.predict(feats_df, use_calibrated=False)
-            feats_df["raw_score"] = scores
-
-            # 5. Entity Aggregation & Locked Threshold Policy
-            _, cands_by_s1 = EntityAggregator.aggregate_entity_candidates(
-                feats_df, all_s1_ids, score_col="raw_score"
+            # Index target corpus for this country partition
+            print(f"  Indexing target corpus ({len(target_c_norm)} entities) with CandidateRetriever...")
+            country_retriever = CandidateRetriever(
+                top_k_name_tfidf=self.config.top_k_name_tfidf,
+                top_k_addr_tfidf=self.config.top_k_addr_tfidf,
+                min_tfidf_score=self.config.min_tfidf_score,
+                enable_word_tfidf=self.config.enable_word_tfidf,
+                top_k_word_tfidf=self.config.top_k_word_tfidf,
+                max_candidates_per_entity=self.config.max_candidates_per_entity,
             )
-            active_policy = self.locked_policy or EntityDecisionPolicy()
-            predictions = EntityAggregator.apply_policy(
-                cands_by_s1, active_policy, all_s1_ids, s1_country_map=s1_country_map
-            )
+            country_retriever.fit(target_c_norm)
 
-            matching_results_df = EntityAggregator.to_matching_results_tsv(
-                predictions, all_s1_ids=all_s1_ids
-            )
-            if matching_out is not None and candidates_out is not None:
-                matching_results_df.to_csv(matching_out, sep="\t", index=False, encoding="utf-8")
-                candidate_pairs_df.to_csv(candidates_out, sep="\t", index=False, encoding="utf-8")
-            return matching_results_df, candidate_pairs_df
-        else:
-            # Batch-streamed inference directly to disk to preserve memory on large test sets
-            n_batches = (total_s1 + batch_size - 1) // batch_size
-            print(f"  [Inference Memory Management] Processing {total_s1} entities across {n_batches} batches of up to {batch_size}...")
+            # Stream S1 queries for this country partition in batches
+            s1_batch_size = 50000
+            n_s1_batches = (len(s1_norm) + s1_batch_size - 1) // s1_batch_size
 
-            if matching_out is not None and matching_out.exists():
-                matching_out.unlink()
-            if candidates_out is not None and candidates_out.exists():
-                candidates_out.unlink()
-
-            all_candidate_tsv_parts: List[pd.DataFrame] = []
-            all_matching_tsv_parts: List[pd.DataFrame] = []
-            active_policy = self.locked_policy or EntityDecisionPolicy()
-            total_matches_saved = 0
-            total_cands_saved = 0
-
-            for b_idx in range(n_batches):
-                start = b_idx * batch_size
-                end = min(start + batch_size, total_s1)
-                batch_s1 = s1_norm.iloc[start:end]
+            for b_idx in range(n_s1_batches):
+                b_start = b_idx * s1_batch_size
+                b_end = min(b_start + s1_batch_size, len(s1_norm))
+                batch_s1 = s1_norm.iloc[b_start:b_end]
                 batch_s1_ids = set(batch_s1["entity_id"])
-                pct = 100.0 * end / total_s1
-                print(f"    Batch {b_idx + 1}/{n_batches} ({start + 1} to {end} of {total_s1}, {pct:.1f}%)...")
+                pct = 100.0 * b_end / len(s1_norm)
+                print(f"    [{c_label}] Batch {b_idx + 1}/{n_s1_batches} ({b_start + 1} to {b_end} of {len(s1_norm)}, {pct:.1f}%)...")
 
-                b_cands_raw = test_retriever.retrieve(batch_s1, verbose=False, n_jobs=self.config.n_jobs)
-                b_cand_tsv = test_retriever.to_candidate_pairs_tsv(b_cands_raw, all_s1_ids=batch_s1_ids)
+                b_cands_raw = country_retriever.retrieve(batch_s1, verbose=False, n_jobs=self.config.n_jobs)
+                b_cand_tsv = country_retriever.to_candidate_pairs_tsv(b_cands_raw, all_s1_ids=batch_s1_ids)
 
-                b_pairs_df = test_retriever.to_dataframe(b_cands_raw)
+                b_pairs_df = country_retriever.to_dataframe(b_cands_raw)
                 if b_pairs_df.empty:
                     b_match_tsv = EntityAggregator.to_matching_results_tsv({}, batch_s1_ids)
                 else:
-                    b_needed_targets = set(b_pairs_df["candidate_entity_id"])
-                    sub_target = target_norm[target_norm["entity_id"].isin(b_needed_targets)]
+                    b_needed = set(b_pairs_df["candidate_entity_id"])
+                    sub_target = target_c_norm[target_c_norm["entity_id"].isin(b_needed)]
                     b_target_records = sub_target.set_index("entity_id").to_dict(orient="index")
                     del sub_target
 
@@ -407,8 +413,11 @@ class BusinessEntityResolutionPipeline:
                         verbose=False,
                         n_jobs=self.config.n_jobs,
                     )
+                    del b_s1_records, b_target_records
+
                     b_scores = self.pair_scorer.predict(b_feats_df, use_calibrated=False)
                     b_feats_df["raw_score"] = b_scores
+
                     _, b_cands_by_s1 = EntityAggregator.aggregate_entity_candidates(
                         b_feats_df, batch_s1_ids, score_col="raw_score"
                     )
@@ -417,30 +426,57 @@ class BusinessEntityResolutionPipeline:
                     )
                     b_match_tsv = EntityAggregator.to_matching_results_tsv(b_preds, all_s1_ids=batch_s1_ids)
 
-                    del b_target_records, b_s1_records, b_feats_df, b_scores, b_cands_by_s1, b_preds
+                    del b_feats_df, b_scores, b_cands_by_s1, b_preds
 
-                if matching_out is not None and candidates_out is not None:
-                    mode = "a" if b_idx > 0 else "w"
-                    header = (b_idx == 0)
+                if streaming_to_disk:
+                    mode = "w" if is_first_write else "a"
+                    header = is_first_write
                     b_cand_tsv.to_csv(candidates_out, sep="\t", index=False, mode=mode, header=header, encoding="utf-8")
                     b_match_tsv.to_csv(matching_out, sep="\t", index=False, mode=mode, header=header, encoding="utf-8")
+                    is_first_write = False
                     total_matches_saved += len(b_match_tsv)
                     total_cands_saved += len(b_cand_tsv)
                 else:
-                    all_candidate_tsv_parts.append(b_cand_tsv)
-                    all_matching_tsv_parts.append(b_match_tsv)
+                    all_matching_dfs.append(b_match_tsv)
+                    all_candidate_dfs.append(b_cand_tsv)
 
+                seen_s1_ids.update(batch_s1_ids)
                 del b_cands_raw, b_cand_tsv, b_pairs_df, b_match_tsv
                 gc.collect()
 
-            if matching_out is not None and candidates_out is not None:
-                # Proxies with metadata so caller does not reload 1.7M rows into RAM
-                matching_results_df = pd.DataFrame({"source1_entity_id": [f"saved_{total_matches_saved}_rows"]})
-                candidate_pairs_df = pd.DataFrame({"source1_entity_id": [f"saved_{total_cands_saved}_rows"]})
-                matching_results_df._actual_len = total_matches_saved
-                candidate_pairs_df._actual_len = total_cands_saved
-            else:
-                matching_results_df = pd.concat(all_matching_tsv_parts, ignore_index=True)
-                candidate_pairs_df = pd.concat(all_candidate_tsv_parts, ignore_index=True)
+            # Release country retriever and target normalized memory immediately
+            del s1_norm, target_c_norm, country_retriever, s1_c
+            gc.collect()
 
-            return matching_results_df, candidate_pairs_df
+        # Sanity check: Ensure all test S1 IDs appear in output
+        missing_s1_ids = all_test_s1_ids - seen_s1_ids
+        if missing_s1_ids:
+            print(f"  [Safety Check] Found {len(missing_s1_ids)} S1 entities outside country partitions; emitting as singletons...")
+            fallback_match_tsv = EntityAggregator.to_matching_results_tsv({}, missing_s1_ids)
+            fallback_cand_tsv = pd.DataFrame({
+                "source1_entity_id": sorted(missing_s1_ids),
+                "candidate_entity_ids": [""] * len(missing_s1_ids),
+            })
+            if streaming_to_disk:
+                mode = "w" if is_first_write else "a"
+                header = is_first_write
+                fallback_cand_tsv.to_csv(candidates_out, sep="\t", index=False, mode=mode, header=header, encoding="utf-8")
+                fallback_match_tsv.to_csv(matching_out, sep="\t", index=False, mode=mode, header=header, encoding="utf-8")
+                is_first_write = False
+                total_matches_saved += len(fallback_match_tsv)
+                total_cands_saved += len(fallback_cand_tsv)
+            else:
+                all_matching_dfs.append(fallback_match_tsv)
+                all_candidate_dfs.append(fallback_cand_tsv)
+            seen_s1_ids.update(missing_s1_ids)
+
+        if streaming_to_disk:
+            matching_results_df = pd.DataFrame({"source1_entity_id": [f"saved_{total_matches_saved}_rows"]})
+            candidate_pairs_df = pd.DataFrame({"source1_entity_id": [f"saved_{total_cands_saved}_rows"]})
+            matching_results_df._actual_len = total_matches_saved
+            candidate_pairs_df._actual_len = total_cands_saved
+        else:
+            matching_results_df = pd.concat(all_matching_dfs, ignore_index=True) if all_matching_dfs else pd.DataFrame(columns=["source1_entity_id", "matched_entity_ids"])
+            candidate_pairs_df = pd.concat(all_candidate_dfs, ignore_index=True) if all_candidate_dfs else pd.DataFrame(columns=["source1_entity_id", "candidate_entity_ids"])
+
+        return matching_results_df, candidate_pairs_df

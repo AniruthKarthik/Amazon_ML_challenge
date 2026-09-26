@@ -118,12 +118,13 @@ class CandidateRetriever:
                 self._exact_core_name_index[core_name].append(eid)
 
         # 2. Character TF-IDF Name Vectorizer (char_wb 3-4 grams)
+        min_df_val = 2 if len(target_df) >= 1000 else 1
         name_corpus = target_df["name_clean"].fillna("").tolist()
         self._name_vectorizer = TfidfVectorizer(
             analyzer="char_wb",
             ngram_range=(3, 4),
-            min_df=1,
-            max_features=80000,
+            min_df=min_df_val,
+            max_features=60000,
             sublinear_tf=True,
             dtype=np.float32,
         )
@@ -135,8 +136,8 @@ class CandidateRetriever:
         self._addr_vectorizer = TfidfVectorizer(
             analyzer="word",
             ngram_range=(1, 2),
-            min_df=1,
-            max_features=50000,
+            min_df=min_df_val,
+            max_features=40000,
             sublinear_tf=True,
             dtype=np.float32,
         )
@@ -194,7 +195,7 @@ class CandidateRetriever:
         ----------
         s1_df : pd.DataFrame with normalized S1 entities.
         verbose : whether to display live channel progress status.
-        n_jobs : number of parallel worker processes (-1 for all available cores).
+        n_jobs : number of parallel worker processes/threads (-1 for all available cores).
 
         Returns
         -------
@@ -212,7 +213,7 @@ class CandidateRetriever:
                 f"  [Candidate Retrieval] Querying {total_s1} entities across exact, rare-token, and sparse TF-IDF channels..."
             )
 
-        results = self._retrieve_single(s1_df, verbose=verbose)
+        results = self._retrieve_single(s1_df, verbose=verbose, n_jobs=n_jobs)
 
         total_candidates = sum(len(cands) for cands in results.values())
         if verbose:
@@ -233,7 +234,8 @@ class CandidateRetriever:
         top_k: int,
         channel_name: str,
         stage_desc: str,
-        batch_size: int = 200,
+        batch_size: int = 1500,
+        n_jobs: int = -1,
         verbose: bool = True,
     ) -> None:
         """Execute TF-IDF KNN query in streaming memory-bounded batches to prevent OOM."""
@@ -243,17 +245,16 @@ class CandidateRetriever:
 
         # target_matrix.T is a zero-copy CSC view sharing underlying arrays
         target_matrix_t = target_matrix.T
+        target_ids = self._target_ids
 
-        log_interval = max(batch_size * 5, 2000)
-
-        for b_start in range(0, total_queries, batch_size):
-            b_end = min(b_start + batch_size, total_queries)
+        def _process_sub_batch(b_start: int, b_end: int) -> List[Tuple[str, str, float, int]]:
             b_texts = query_texts[b_start:b_end]
             b_ids = query_s1_ids[b_start:b_end]
 
             sub_mat = vectorizer.transform(b_texts)
             sim_mat = sub_mat.dot(target_matrix_t)
 
+            local_cands: List[Tuple[str, str, float, int]] = []
             for local_idx in range(len(b_texts)):
                 s1_id = b_ids[local_idx]
                 s = sim_mat.indptr[local_idx]
@@ -277,29 +278,64 @@ class CandidateRetriever:
                     top_order = np.argsort(-valid_scores)
 
                 for rank, idx in enumerate(top_order, start=1):
-                    target_id = self._target_ids[valid_cols[idx]]
+                    target_id = target_ids[valid_cols[idx]]
                     score = float(valid_scores[idx])
+                    local_cands.append((s1_id, target_id, score, rank))
+
+            del sub_mat
+            del sim_mat
+            return local_cands
+
+        workers = min(4, os.cpu_count() or 1) if n_jobs != 1 else 1
+        chunks = [
+            (b_start, min(b_start + batch_size, total_queries))
+            for b_start in range(0, total_queries, batch_size)
+        ]
+
+        if workers > 1 and len(chunks) > 1:
+            from concurrent.futures import ThreadPoolExecutor
+            wave_size = workers * 2
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                for i in range(0, len(chunks), wave_size):
+                    wave = chunks[i : i + wave_size]
+                    futures = [executor.submit(_process_sub_batch, c[0], c[1]) for c in wave]
+                    for fut in futures:
+                        batch_cands = fut.result()
+                        for s1_id, target_id, score, rank in batch_cands:
+                            prov = self._get_or_create(results, s1_id, target_id)
+                            prov.channels.add(channel_name)
+                            prov.scores[channel_name] = score
+                            prov.ranks[channel_name] = rank
+                    completed = min(wave[-1][1], total_queries)
+                    if verbose:
+                        pct = 100.0 * completed / total_queries
+                        print(
+                            f"\r  [{stage_desc}] {completed}/{total_queries} queries ({pct:.1f}%)",
+                            end="",
+                            flush=True,
+                        )
+        else:
+            log_interval = max(batch_size * 4, 2000)
+            for b_start, b_end in chunks:
+                batch_cands = _process_sub_batch(b_start, b_end)
+                for s1_id, target_id, score, rank in batch_cands:
                     prov = self._get_or_create(results, s1_id, target_id)
                     prov.channels.add(channel_name)
                     prov.scores[channel_name] = score
                     prov.ranks[channel_name] = rank
-
-            del sub_mat
-            del sim_mat
-
-            if verbose and (b_end % log_interval == 0 or b_end == total_queries or b_end <= batch_size):
-                pct = 100.0 * b_end / total_queries
-                print(
-                    f"\r  [{stage_desc}] {b_end}/{total_queries} queries ({pct:.1f}%)",
-                    end="",
-                    flush=True,
-                )
+                if verbose and (b_end % log_interval == 0 or b_end == total_queries or b_end <= batch_size):
+                    pct = 100.0 * b_end / total_queries
+                    print(
+                        f"\r  [{stage_desc}] {b_end}/{total_queries} queries ({pct:.1f}%)",
+                        end="",
+                        flush=True,
+                    )
 
         if verbose and total_queries > 0:
             print(f"\r  [{stage_desc}] Completed {total_queries}/{total_queries} queries.         ")
 
     def _retrieve_single(
-        self, s1_df: pd.DataFrame, verbose: bool = False
+        self, s1_df: pd.DataFrame, verbose: bool = False, n_jobs: int = -1
     ) -> Dict[str, Dict[str, CandidateProvenance]]:
         results: Dict[str, Dict[str, CandidateProvenance]] = {
             s1_id: {} for s1_id in s1_df["entity_id"]
@@ -366,7 +402,8 @@ class CandidateRetriever:
                 top_k=self.top_k_name_tfidf,
                 channel_name="tfidf_name",
                 stage_desc="Candidate Retrieval 2/4: Char TF-IDF",
-                batch_size=200,
+                batch_size=1500,
+                n_jobs=n_jobs,
                 verbose=verbose,
             )
 
@@ -388,7 +425,8 @@ class CandidateRetriever:
                     top_k=self.top_k_addr_tfidf,
                     channel_name="tfidf_addr",
                     stage_desc="Candidate Retrieval 3/4: Address TF-IDF",
-                    batch_size=200,
+                    batch_size=1500,
+                    n_jobs=n_jobs,
                     verbose=verbose,
                 )
 
@@ -406,7 +444,8 @@ class CandidateRetriever:
                 top_k=self.top_k_word_tfidf,
                 channel_name="tfidf_word",
                 stage_desc="Candidate Retrieval 4/4: Word TF-IDF",
-                batch_size=200,
+                batch_size=1500,
+                n_jobs=n_jobs,
                 verbose=verbose,
             )
 
