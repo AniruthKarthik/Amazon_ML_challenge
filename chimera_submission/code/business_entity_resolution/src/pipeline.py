@@ -253,12 +253,12 @@ class BusinessEntityResolutionPipeline:
     def predict(
         self,
         test_s1_df: pd.DataFrame,
-        test_s2_df: pd.DataFrame,
-        test_s3_df: pd.DataFrame,
+        test_s2: Union[pd.DataFrame, Path, str],
+        test_s3: Union[pd.DataFrame, Path, str],
         matching_out: Optional[Path] = None,
         candidates_out: Optional[Path] = None,
     ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        """Run deterministic frozen inference on test data.
+        """Run deterministic frozen inference on test data with strictly bounded RAM (< 6GB).
 
         Returns
         -------
@@ -314,19 +314,31 @@ class BusinessEntityResolutionPipeline:
 
             if country:
                 s1_mask = test_s1_df["country"].fillna("").astype(str).str.strip() == country
-                s2_mask = test_s2_df["country"].fillna("").astype(str).str.strip() == country
-                s3_mask = test_s3_df["country"].fillna("").astype(str).str.strip() == country
             else:
                 s1_mask = test_s1_df["country"].isna() | (test_s1_df["country"].astype(str).str.strip() == "")
-                s2_mask = test_s2_df["country"].isna() | (test_s2_df["country"].astype(str).str.strip() == "")
-                s3_mask = test_s3_df["country"].isna() | (test_s3_df["country"].astype(str).str.strip() == "")
 
             s1_c = test_s1_df[s1_mask]
             if s1_c.empty:
                 continue
 
-            s2_c = test_s2_df[s2_mask]
-            s3_c = test_s3_df[s3_mask]
+            if isinstance(test_s2, (str, Path)):
+                s2_c = TSVLoader.load_country_source_tsv(test_s2, country=country, expected_prefix="S2")
+            else:
+                if country:
+                    s2_mask = test_s2["country"].fillna("").astype(str).str.strip() == country
+                else:
+                    s2_mask = test_s2["country"].isna() | (test_s2["country"].astype(str).str.strip() == "")
+                s2_c = test_s2[s2_mask]
+
+            if isinstance(test_s3, (str, Path)):
+                s3_c = TSVLoader.load_country_source_tsv(test_s3, country=country, expected_prefix="S3")
+            else:
+                if country:
+                    s3_mask = test_s3["country"].fillna("").astype(str).str.strip() == country
+                else:
+                    s3_mask = test_s3["country"].isna() | (test_s3["country"].astype(str).str.strip() == "")
+                s3_c = test_s3[s3_mask]
+
             s1_c_ids = set(s1_c["entity_id"])
             print(f"  Entities: S1={len(s1_c)}, S2={len(s2_c)}, S3={len(s3_c)}")
 
@@ -381,8 +393,12 @@ class BusinessEntityResolutionPipeline:
             )
             country_retriever.fit(target_c_norm)
 
-            # Stream S1 queries for this country partition in batches
-            s1_batch_size = 50000
+            # Keep only needed columns and index once by entity_id to eliminate full-corpus scans per batch
+            target_keep = [c for c in ["name_clean", "name_core", "address_clean", "address_alias", "country"] if c in target_c_norm.columns]
+            target_c_norm = target_c_norm.set_index("entity_id")[target_keep]
+
+            # Stream S1 queries for this country partition in memory-safe batches of 10,000 entities
+            s1_batch_size = 10000
             n_s1_batches = (len(s1_norm) + s1_batch_size - 1) // s1_batch_size
 
             for b_idx in range(n_s1_batches):
@@ -401,9 +417,8 @@ class BusinessEntityResolutionPipeline:
                     b_match_tsv = EntityAggregator.to_matching_results_tsv({}, batch_s1_ids)
                 else:
                     b_needed = set(b_pairs_df["candidate_entity_id"])
-                    sub_target = target_c_norm[target_c_norm["entity_id"].isin(b_needed)]
-                    b_target_records = sub_target.set_index("entity_id").to_dict(orient="index")
-                    del sub_target
+                    matching_ids = target_c_norm.index.intersection(b_needed)
+                    b_target_records = target_c_norm.loc[matching_ids].to_dict(orient="index")
 
                     b_s1_records = batch_s1.set_index("entity_id").to_dict(orient="index")
                     b_feats_df = PairFeatureExtractor.build_features(

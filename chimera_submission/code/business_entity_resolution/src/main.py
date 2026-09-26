@@ -186,31 +186,30 @@ def main() -> int:
     print(f"  Locked Decision Policy:   {rep.get('locked_policy')}")
 
     # 3. Load Test Data
-    print("\n[Step 3/5] Loading and validating test data...")
+    print("\n[Step 3/5] Loading and validating test reference data...")
     test_s1_file = test_path / "test_source1.tsv"
     test_s2_file = test_path / "test_source2.tsv"
     test_s3_file = test_path / "test_source3.tsv"
 
     test_s1 = TSVLoader.load_source_tsv(test_s1_file, expected_prefix="S1")
-    test_s2 = TSVLoader.load_source_tsv(test_s2_file, expected_prefix="S2")
-    test_s3 = TSVLoader.load_source_tsv(test_s3_file, expected_prefix="S3")
     print(
-        f"  Loaded Test S1: {len(test_s1)}, S2: {len(test_s2)}, S3: {len(test_s3)}"
+        f"  Loaded Test S1: {len(test_s1)} entities across {test_s1['country'].nunique()} country partitions."
     )
+    print(f"  Streaming target sources (S2 & S3) directly by country partition to keep RAM < 6GB.")
 
     # 4. Predict & Stream Directly to Output TSVs
-    print("\n[Step 4/5] Executing frozen inference on test set...")
+    print("\n[Step 4/5] Executing frozen inference on test set (streaming country-by-country)...")
     matching_out = out_path / "matching_results.tsv"
     candidates_out = out_path / "candidate_pairs.tsv"
 
     matching_df, candidates_df = pipeline.predict(
         test_s1,
-        test_s2,
-        test_s3,
+        test_s2_file,
+        test_s3_file,
         matching_out=matching_out,
         candidates_out=candidates_out,
     )
-    del test_s1, test_s2, test_s3
+    del test_s1
     gc.collect()
 
     # 5. Export Results

@@ -286,6 +286,75 @@ class TSVLoader:
 
         return train_s1, train_s2, train_s3, sampled_gt
 
+    @classmethod
+    def load_country_source_tsv(
+        cls,
+        filepath_or_buffer: Union[str, Path, io.StringIO, pd.DataFrame],
+        country: str,
+        expected_prefix: Optional[str] = None,
+    ) -> pd.DataFrame:
+        """Stream a source TSV and extract records belonging to a specific country with bounded RAM."""
+        if isinstance(filepath_or_buffer, pd.DataFrame):
+            df = filepath_or_buffer
+            if country:
+                return df[df["country"].fillna("").astype(str).str.strip() == country].copy()
+            return df[df["country"].isna() | (df["country"].astype(str).str.strip() == "")].copy()
+
+        if not isinstance(filepath_or_buffer, (str, Path)) or not os.path.isfile(str(filepath_or_buffer)):
+            df = cls.load_source_tsv(filepath_or_buffer, expected_prefix=expected_prefix)
+            if country:
+                return df[df["country"].fillna("").astype(str).str.strip() == country].copy()
+            return df[df["country"].isna() | (df["country"].astype(str).str.strip() == "")].copy()
+
+        path = str(filepath_or_buffer)
+        eids, names, addrs, countries = [], [], [], []
+        target_country = country.strip() if country else ""
+
+        with open(path, "r", encoding="utf-8") as f:
+            header_line = f.readline()
+            if not header_line:
+                raise DataIntegrityError(f"File {path} is empty.")
+            headers = [h.strip().lower() for h in header_line.split("\t")]
+            col_map = {name: idx for idx, name in enumerate(headers)}
+            for req in REQUIRED_SOURCE_COLUMNS:
+                if req not in col_map:
+                    raise DataIntegrityError(f"Missing required column '{req}' in {path}.")
+
+            id_idx = col_map["entity_id"]
+            name_idx = col_map["business_name"]
+            addr_idx = col_map["business_address"]
+            ctry_idx = col_map["country"]
+
+            prefix_tag = f"{expected_prefix.upper()}-" if expected_prefix else None
+
+            for line in f:
+                if not line.strip():
+                    continue
+                parts = line.rstrip("\r\n").split("\t")
+                if len(parts) <= max(id_idx, name_idx, addr_idx, ctry_idx):
+                    continue
+                row_country = parts[ctry_idx].strip()
+                if row_country != target_country:
+                    continue
+
+                eid = parts[id_idx].strip()
+                if not eid:
+                    continue
+                if prefix_tag and not eid.startswith(prefix_tag):
+                    continue
+
+                eids.append(eid)
+                names.append(parts[name_idx].strip())
+                addrs.append(parts[addr_idx].strip())
+                countries.append(row_country)
+
+        return pd.DataFrame({
+            "entity_id": eids,
+            "business_name": names,
+            "business_address": addrs,
+            "country": countries,
+        })
+
 
 
 class GroundTruthLoader:

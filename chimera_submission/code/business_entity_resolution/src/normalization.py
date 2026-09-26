@@ -124,18 +124,36 @@ class TextNormalizer:
         return " ".join(cleaned.split())
 
     @staticmethod
+    def fold_accents_clean(clean_text: Optional[str]) -> str:
+        """Produce `folded` view directly from pre-cleaned text."""
+        if not clean_text:
+            return ""
+        nfd_form = unicodedata.normalize("NFD", clean_text)
+        without_accents = "".join(
+            char for char in nfd_form if unicodedata.category(char) != "Mn"
+        )
+        return " ".join(without_accents.split())
+
+    @staticmethod
     def fold_accents(text: Optional[str]) -> str:
         """Produce `folded` view: accent/diacritic removal via NFD decomposition."""
         if not text:
             return ""
         clean = TextNormalizer.clean_name(text)
-        # Decompose Unicode characters (e.g., é -> e + accent mark)
-        nfd_form = unicodedata.normalize("NFD", clean)
-        # Filter out combining diacritical marks
-        without_accents = "".join(
-            char for char in nfd_form if unicodedata.category(char) != "Mn"
-        )
-        return " ".join(without_accents.split())
+        return TextNormalizer.fold_accents_clean(clean)
+
+    @staticmethod
+    def extract_core_from_folded(folded: Optional[str]) -> str:
+        """Produce `core` view directly from pre-folded text."""
+        if not folded:
+            return ""
+        prev = None
+        current = folded
+        while current != prev:
+            prev = current
+            current = _SUFFIX_PATTERN.sub("", current).strip()
+            current = re.sub(r"[,\s\'-]+$", "", current).strip()
+        return current if current else folded
 
     @staticmethod
     def extract_core_name(text: Optional[str]) -> str:
@@ -143,16 +161,7 @@ class TextNormalizer:
         if not text:
             return ""
         folded = TextNormalizer.fold_accents(text)
-        # Iteratively strip legal suffixes (e.g., 'Private Limited Company')
-        prev = None
-        current = folded
-        while current != prev:
-            prev = current
-            current = _SUFFIX_PATTERN.sub("", current).strip()
-            # Clean trailing dashes or commas
-            current = re.sub(r"[,\s\'-]+$", "", current).strip()
-
-        return current if current else folded
+        return TextNormalizer.extract_core_from_folded(folded)
 
     @staticmethod
     def clean_address(text: Optional[str]) -> str:
@@ -185,9 +194,11 @@ class TextNormalizer:
     @classmethod
     def _normalize_single(cls, df: pd.DataFrame) -> pd.DataFrame:
         out_df = df.copy()
-        out_df["name_clean"] = out_df["business_name"].apply(cls.clean_name)
-        out_df["name_folded"] = out_df["business_name"].apply(cls.fold_accents)
-        out_df["name_core"] = out_df["business_name"].apply(cls.extract_core_name)
+        clean_names = out_df["business_name"].apply(cls.clean_name)
+        out_df["name_clean"] = clean_names
+        name_foldeds = clean_names.apply(cls.fold_accents_clean)
+        out_df["name_folded"] = name_foldeds
+        out_df["name_core"] = name_foldeds.apply(cls.extract_core_from_folded)
         clean_addrs = out_df["business_address"].apply(cls.clean_address)
         out_df["address_clean"] = clean_addrs
         out_df["address_alias"] = clean_addrs.apply(cls.alias_clean_address)
@@ -196,11 +207,11 @@ class TextNormalizer:
     @classmethod
     def normalize_dataframe(cls, df: pd.DataFrame, n_jobs: int = -1, verbose: bool = True) -> pd.DataFrame:
         """Add all normalized views to a DataFrame with multi-core parallelism."""
-        if len(df) < 50 or n_jobs == 1:
+        if len(df) < 2000 or n_jobs == 1:
             return cls._normalize_single(df)
 
         n_workers = os.cpu_count() or 4 if n_jobs == -1 else n_jobs
-        n_workers = max(1, min(n_workers, 8))
+        n_workers = max(1, min(n_workers, 4))
 
         chunk_size = (len(df) + n_workers - 1) // n_workers
         chunks = [df.iloc[i : i + chunk_size] for i in range(0, len(df), chunk_size)]
